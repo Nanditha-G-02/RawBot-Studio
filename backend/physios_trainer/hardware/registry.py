@@ -202,6 +202,15 @@ class Registry:
         atomic_write_json(self.root / 'captures' / ('%s.json' % cid), rec)
         return {k: v for k, v in rec.items() if k != 'samples'}
 
+    def capture(self, cid):
+        if not cid or '/' in cid or cid.startswith('.'):
+            return None
+        try:
+            with open(self.root / 'captures' / ('%s.json' % cid)) as f:
+                return json.load(f)
+        except (OSError, ValueError):
+            return None
+
     def captures(self, robot_type=None):
         out = []
         for p in sorted((self.root / 'captures').glob('*.json'), reverse=True)[:50]:

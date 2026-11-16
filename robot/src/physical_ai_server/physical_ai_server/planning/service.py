@@ -46,6 +46,22 @@ class CommandError(Exception):
     pass
 
 
+def _clean_setup(setup):
+    """How a take was recorded (configuration, action source, target robot, observation,
+    cameras), as sent by RawBot Studio - kept with the attempt for traceability."""
+    if not isinstance(setup, dict):
+        return None
+    out = {}
+    for k in ('config', 'action', 'target', 'observation', 'action_param'):
+        v = setup.get(k)
+        if isinstance(v, str):
+            out[k] = v[:40]
+    cams = setup.get('cameras')
+    if isinstance(cams, list):
+        out['cameras'] = [str(c)[:200] for c in cams[:8]]
+    return out or None
+
+
 def _slug(text):
     import re
     s = re.sub(r'[^A-Za-z0-9_.-]+', '_', (text or '').strip()).strip('_.-')
@@ -589,7 +605,7 @@ class PlanningService:
             'record_rosbag2': False,
         }
 
-    def cmd_record_begin(self, plan_id, episode_id, retake=False):
+    def cmd_record_begin(self, plan_id, episode_id, retake=False, setup=None):
         with self.store.lock:
             approved, _ = self._approved(plan_id)
             prog = self._progress(plan_id, approved)
@@ -633,7 +649,7 @@ class PlanningService:
             prog['active'] = {'episode_id': episode_id, 'started_at': now_iso(),
                               'base_total_episodes': base, 'task_info': task_info,
                               'plan_version': approved['version'], 'confirmed': False,
-                              'saved_index': None}
+                              'saved_index': None, 'setup': _clean_setup(setup)}
             prog['episodes'][episode_id]['status'] = 'recording'
             self.store.save_progress(plan_id, prog)
             self.store.set_state(active_plan_id=plan_id, recording_plan_id=plan_id)
@@ -776,6 +792,8 @@ class PlanningService:
         attempt = {'started_at': a.get('started_at'), 'ended_at': now_iso(),
                    'result': result, 'plan_version': a.get('plan_version'),
                    'dataset_episode_index': index, 'validation': check}
+        if a.get('setup'):
+            attempt['setup'] = a['setup']
         e.setdefault('attempts', []).append(attempt)
         if result == 'saved':
             e['dataset_episode_index'] = index
@@ -851,6 +869,7 @@ class PlanningService:
                                      'episode_id': eid, 'plan_version': att.get('plan_version'),
                                      'config': eps.get(eid), 'items': ver['task'].get('items'),
                                      'validation': att.get('validation'),
+                                     'setup': att.get('setup'),
                                      'frames': (att.get('validation') or {}).get('frames'),
                                      'superseded': idx != st.get('dataset_episode_index')}
         return out

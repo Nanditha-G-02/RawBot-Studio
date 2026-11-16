@@ -24,7 +24,7 @@ import toast from 'react-hot-toast';
 import rosConnectionManager from '../../utils/rosConnectionManager';
 import { useRosLink } from '../../hooks/useConnectionMonitor';
 import { usePlanningService } from '../../hooks/usePlanningService';
-import { hwActionSource, hwSetup, hwStatus, topicsFromParams } from './hardwareApi';
+import { camerasFromParams, hwActionSource, hwSetup, hwStatus, jointsFromParams, topicsFromParams } from './hardwareApi';
 import { setHardwareOffline, setHardwareStatus } from './hardwareSlice';
 
 const SHOW = new Set(['lost', 'unplug', 'plug', 'reconnect', 'estop', 'calibration', 'mode']);
@@ -85,12 +85,14 @@ export default function HardwareMonitor() {
       .then((res) => {
         if (cancelled) return;
         const topics = topicsFromParams(res.params);
-        const key = `${robotType}|${JSON.stringify(topics)}`;
-        if (!Object.keys(topics).length || topicsSent.current === key) return;
+        const cameras = camerasFromParams(res.params);
+        const joints = jointsFromParams(res.params);
+        const key = `${robotType}|${JSON.stringify([topics, cameras, joints])}`;
+        if (!Object.keys(topics).length) return;
+        if (topicsSent.current === key && JSON.stringify(topics) === JSON.stringify(status.topics || {})) return;
         topicsSent.current = key;
-        if (JSON.stringify(topics) !== JSON.stringify(status.topics || {})) {
-          hwSetup(robotType, { topics }).then((st) => dispatch(setHardwareStatus(st))).catch(() => {});
-        }
+        // cameras and joint names: for the Planning choices and the simulated robot
+        hwSetup(robotType, { topics, cameras, joints }).then((st) => dispatch(setHardwareStatus(st))).catch(() => {});
       })
       .catch(() => {});
     return () => {
@@ -98,12 +100,14 @@ export default function HardwareMonitor() {
     };
   }, [robotType, linked, status?.robot_type, status?.topics, call, dispatch]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Follower Only records hand-guided demonstrations: physical_ai_server then takes the
-  // action from the follower. Every other configuration keeps the leader (the original).
+  // Where physical_ai_server takes the recorded action from, for the action source chosen in
+  // Planning (hardware/planning.py): 'follower' for hand guiding and the simulated robot,
+  // 'leader' (the original) for the leader arm and supervised direct control.
   const mode = status?.robot_type === robotType ? status?.mode : null;
+  const param = status?.robot_type === robotType ? status?.planning?.record?.action_param : null;
   useEffect(() => {
     if (!robotType || !linked || !mode) return;
-    const want = mode === 'follower_only' ? 'follower' : 'leader';
+    const want = param || (mode === 'follower_only' ? 'follower' : 'leader');
     const key = `${robotType}|${want}`;
     if (sourceSent.current === key) return;
     sourceSent.current = key;
@@ -136,7 +140,7 @@ export default function HardwareMonitor() {
       if (ok === null) sourceSent.current = ''; // try again later
       hwActionSource(robotType, ok).catch(() => {});
     })();
-  }, [robotType, linked, mode, rosbridgeUrl]);
+  }, [robotType, linked, mode, param, rosbridgeUrl]);
 
   return null;
 }

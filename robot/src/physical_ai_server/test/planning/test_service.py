@@ -58,9 +58,11 @@ def wait_for(fn, timeout=10):
     raise AssertionError('timeout')
 
 
-def record_one(svc, tmp_path, plan, episode_id, retake=False, frames=60):
-    begin = svc.handle('record.begin', {'plan_id': plan['id'], 'episode_id': episode_id,
-                                        'retake': retake})
+def record_one(svc, tmp_path, plan, episode_id, retake=False, frames=60, setup=None):
+    args = {'plan_id': plan['id'], 'episode_id': episode_id, 'retake': retake}
+    if setup is not None:
+        args['setup'] = setup
+    begin = svc.handle('record.begin', args)
     ti = begin['task_info']
     ok, msg = svc.check_start(ti)
     assert ok, msg
@@ -323,3 +325,23 @@ def test_free_recording_saves_are_listed_for_review(env):
     counts = svc.handle('data.overview', {'dataset_id': 'tester/s101_dataset_free'})[
         'review_counts']
     assert counts['pending'] == 1 and counts['total'] == 1
+
+
+def test_take_keeps_how_it_was_recorded(env):
+    """RawBot Studio sends the hardware setup of a take (configuration, action source,
+    target robot, observation, cameras); it is kept with the attempt and shown in Data."""
+    svc, _, tmp = env
+    plan = approved_plan(svc, n=2)
+    setup = {'config': 'simulation', 'action': 'gamepad', 'target': 'sim',
+             'observation': 'sim', 'action_param': 'follower', 'cameras': ['/cam'],
+             'junk': {'x': 1}}
+    idx = record_one(svc, tmp, plan, 'E001', setup=setup)
+    e = svc.handle('record.state', {'plan_id': plan['id']})['progress']['episodes']['E001']
+    kept = e['attempts'][-1]['setup']
+    assert kept == {k: v for k, v in setup.items() if k != 'junk'}
+    ds = svc.handle('record.state', {'plan_id': plan['id']})['progress']['dataset_id']
+    assert svc._bindings(ds)[idx]['setup'] == kept
+    # without a setup (older RawBot Studio) nothing changes
+    record_one(svc, tmp, plan, 'E002')
+    e = svc.handle('record.state', {'plan_id': plan['id']})['progress']['episodes']['E002']
+    assert 'setup' not in e['attempts'][-1]

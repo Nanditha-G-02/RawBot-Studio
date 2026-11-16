@@ -178,9 +178,9 @@ setup** row under the robot list sets what this robot has:
 | Configuration | What it enables |
 |---|---|
 | **Leader + Follower** (default; existing projects keep it) | teleoperation, synchronized recording, demonstration collection (Plan → Record) |
-| **Leader Only** | leader calibration, leader joint monitoring, leader trajectory capture |
+| **Leader Only** | leader calibration, leader joint monitoring, leader trajectory capture; with the simulated twin, recording (the leader drives the simulated robot) |
 | **Follower Only** | follower calibration, joint monitoring, direct control (supervised jog), policy runs, hand-guided recording |
-| **Simulation Only** | planning, the 3D model and simulation view, training; nothing uses an arm |
+| **Simulation Only** | planning, the 3D model and simulation view, training, the simulated robot (GUI / keyboard / gamepad / script / replay) and recording it; nothing uses an arm |
 
 **Robots → Hardware setup** (or *Detect & connect →* on Home) shows one card per arm with its
 connection state, serial port, USB identity, motor IDs, calibration and per-joint
@@ -236,7 +236,56 @@ Motion that `bridge.py` makes itself (teleoperation) is not RawBot Studio's: swi
 power off.
 
 What RawBot Studio remembers is in `data/workspace/physios/hardware/`: `registry.json` (arms,
-roles, configuration per robot), `profiles/` (calibrations) and `captures/` (leader captures).
+roles, configuration and Planning choices per robot), `profiles/` (calibrations) and
+`captures/` (leader and simulated-robot trajectory captures).
+
+### 4.6 Planning: robot & control
+
+The top of the Planning page shows **Robot & control**: the configuration, every robot (leader,
+follower, the simulated robot) and camera with its state, and whether a demonstration can be
+recorded now. It follows the hardware status (every 2 s): plug or unplug an arm and the options
+change. Open it (▸) to choose, independently:
+
+* **Action source**: Leader arm, Hand guiding, GUI joint control, Keyboard, Gamepad, Scripted
+  movement, Trajectory replay;
+* **Target robot**: Physical follower or Simulated robot;
+* **Observation**: whose joint states are recorded (follower or simulated).
+
+Options that do not fit the connected hardware are greyed out with a short reason (hover for
+the full one). The control for the choice appears beside them, and again on the Record page:
+
+| Configuration | Default | Also possible |
+|---|---|---|
+| Leader + Follower | Leader arm → Physical follower | keyboard / gamepad / GUI direct control of the follower (jog) when teleoperation is off |
+| Leader Only | Leader arm → Simulated robot (turn on *Simulated twin*) | replay of a dataset episode or a leader capture in simulation |
+| Follower Only | Hand guiding → Physical follower | GUI (hold ± buttons), keyboard or gamepad direct control of the follower |
+| Simulation Only | GUI joint control → Simulated robot | keyboard, gamepad, scripted waypoints, trajectory replay |
+| Physical + Simulated (*Simulated twin* on) | the simulated robot mirrors the physical follower; a real-vs-simulation table shows the difference per joint | the leader drives the simulated robot while the follower follows the leader |
+
+**The simulated robot** runs in the training service: a kinematic copy of the robot's joints that
+follows its target at a joint speed limit and publishes `sensor_msgs/JointState` (positions and
+velocities) on `/rawbot/sim/joint_states`. When the configuration has no physical follower and no
+other program publishes the follower state topic (e.g. `/joint_states`), it publishes that topic
+too, so physical_ai_server records it exactly like a follower: the dataset format, Data, training
+and inference do not change. It never publishes on the command (leader) topic, so it cannot move
+a physical arm. Keyboard: Q/A, W/S, E/D, R/F, T/G, Y/H move joints 1-6 while held. Gamepad
+(standard mapping): sticks for joints 1-4, bumpers and triggers for 5-6. **● Capture** saves a
+joint-only trajectory of the simulated robot (no cameras needed) next to the leader captures;
+both can be replayed in simulation.
+
+**Physical follower by keyboard, gamepad or GUI** is the supervised direct control of 4.5 (limits
+from a dataset, review, three checks): one joint at a time, only while the key, stick or button is
+held. Its commands are the recorded action. Scripts and replays drive only the simulated robot.
+
+**What is recorded:** joint positions (state) and actions, the gripper, every camera of the robot
+configuration, timestamps at the fixed fps, the task instruction and plan episode. Joint
+velocities are not a separate column (the dataset format stays the same); they follow from the
+positions. Each plan take also stores how it was recorded (configuration, action source, target,
+observation, cameras); Data shows it as *Recorded with*.
+
+**Not ready to record?** The panel says why, e.g. a camera that is not publishing (recording needs
+every camera of the robot configuration, also in Simulation Only), *bridge.py already publishes
+/joint_states* (stop it to record the simulated robot), or *start direct control first*.
 
 ## 5. Operator sign-in (optional; required for network access)
 
@@ -336,9 +385,9 @@ Everything runs from the repository itself, without ROS, a GPU or a robot:
 ```bash
 cd backend
 python3 -m pytest -q tests            # gateway: 22
-python3 -m pytest -q trainer_tests    # training service, hardware, standalone layout: 125 (1 skipped)
+python3 -m pytest -q trainer_tests    # training service, hardware, planning setup, standalone layout: 139 (1 skipped)
 cd ../robot/src/physical_ai_server
-python3 -m pytest -q test/planning    # planning engine: 45
+python3 -m pytest -q test/planning    # planning engine: 46
 cd ../../../frontend && CI=true npm run build   # production build, lint warnings fail it
 
 # browser walk-throughs against stand-ins (pip install playwright websockets)
@@ -347,6 +396,7 @@ python3 tests/e2e/run_e2e.py http://127.0.0.1:8700 /tmp/physios-shots   # 26 ste
 python3 tests/e2e/opt_ui_check.py http://127.0.0.1:8700                 # Optimize tab (needs --seed)
 python3 tests/e2e/hw_ui_check.py http://127.0.0.1:8700 /tmp/physios-dev # hardware setup scenarios
 python3 tests/e2e/setup_flow_check.py http://127.0.0.1:8700             # guided robot setup
+python3 tests/e2e/plan_hw_check.py http://127.0.0.1:8700 /tmp/physios-dev # Planning per configuration (needs --seed)
 cd backend && PHYSIOS_PORT=8710 PHYSIOS_AUTH_TOKEN=lab-operator-2026 python3 -m physios_gateway &
 python3 tests/e2e/auth_e2e.py http://127.0.0.1:8710 lab-operator-2026   # sign-in, 6 steps
 ```

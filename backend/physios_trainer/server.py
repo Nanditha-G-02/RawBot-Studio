@@ -169,7 +169,11 @@ def make_handler(svc):
                 return hw.estop(b.get('source') or 'page')
             if m == 'POST' and p == ['setup']:
                 return hw.setup(rt, mode=b.get('mode'), topics=b.get('topics'),
-                                env=b.get('env'))
+                                env=b.get('env'), cameras=b.get('cameras'),
+                                joints=b.get('joints'), sim_twin=b.get('sim_twin'),
+                                selection=b.get('selection'))
+            if m == 'POST' and p == ['sim']:
+                return hw.sim_command(rt, b)
             if m == 'POST' and p == ['action-source']:
                 return hw.report_action_source(rt, b.get('supported'))
             if m == 'POST' and p == ['detect']:

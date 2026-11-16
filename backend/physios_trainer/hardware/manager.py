@@ -30,8 +30,10 @@ import time
 import uuid
 
 from physios_trainer.hardware import capabilities as capmod
+from physios_trainer.hardware import planning as planmod
 from physios_trainer.hardware import ports as portmod
 from physios_trainer.hardware.registry import MODES, ROLES, Registry, motor_spec
+from physios_trainer.hardware.simbot import SimRobot
 from physios_trainer.util import atomic_write_json, now_iso, read_json
 
 HERE = Path(__file__).resolve().parent
@@ -71,6 +73,7 @@ class RosWatch:
         self.url = url
         self.log = log
         self.topics = {}            # topic -> type
+        self.pub_topics = set()     # topics whose publishers are checked (not subscribed)
         self.publishers = {}        # topic -> (t, [names]) from rosapi
         self.br = None
         self.connected = False
@@ -80,9 +83,10 @@ class RosWatch:
         self._stop = False
         threading.Thread(target=self._loop, daemon=True).start()
 
-    def watch(self, topics):
+    def watch(self, topics, publishers_of=()):
         with self.lock:
             self.topics = dict(topics)
+            self.pub_topics = {t for t in publishers_of if t}
 
     def _loop(self):
         from physios_trainer.rollout_worker import Bridge
@@ -90,7 +94,8 @@ class RosWatch:
         while not self._stop:
             with self.lock:
                 topics = dict(self.topics)
-            if not topics:
+                pub_only = set(self.pub_topics) - set(topics)
+            if not topics and not pub_only:
                 time.sleep(0.5)
                 continue
             if self.br is None or not self.br.alive:
@@ -112,8 +117,8 @@ class RosWatch:
                         self._subscribed.add(t)
                 if time.time() - last_pub > 2.5:
                     last_pub = time.time()
-                    for t, typ in topics.items():
-                        if 'JointTrajectory' in typ:
+                    for t, typ in list(topics.items()) + [(t, '') for t in pub_only]:
+                        if 'JointTrajectory' in typ or t in self.pub_topics:
                             try:
                                 pubs = self.br.call('/rosapi/publishers', {'topic': t},
                                                     timeout=1.5).get('publishers') or []
@@ -176,6 +181,10 @@ class Hardware:
         self.ever_connected = {}     # (robot_type, role) -> True once verified this session
         self.active_robot = None
         self.action_source_supported = {}
+        # the simulated robot (simbot.py); publishes over its own rosbridge connection
+        self.sim = SimRobot(self.ros.url, sampler=lambda t: self.ros.sample(t),
+                            bridge_factory=_bridge if monitor else None, log=log,
+                            thread=monitor)
         self._py_cache = {}
         self._ports_seen = False
         self._tick_ports = set()
@@ -336,14 +345,30 @@ class Hardware:
         return res
 
     # ---- setup ------------------------------------------------------------------------
-    def setup(self, robot_type, mode=None, topics=None, env=None, source='operator'):
+    def setup(self, robot_type, mode=None, topics=None, env=None, source='operator',
+              cameras=None, joints=None, sim_twin=None, selection=None):
         cur = self.reg.setup(robot_type)
         kw = {}
+        if cameras is not None:
+            kw['cameras'] = {str(k)[:40]: t for k, t in (cameras or {}).items()
+                             if isinstance(t, str) and t.startswith('/') and len(t) < 200}
+        if joints is not None:
+            kw['joints'] = [str(n)[:60] for n in (joints or [])][:32]
+        if sim_twin is not None:
+            kw['sim_twin'] = bool(sim_twin)
+        if selection is not None:
+            sel = {k: selection.get(k) for k in ('action', 'target', 'observation')
+                   if isinstance(selection.get(k), str)}
+            kw['selection'] = dict(cur.get('selection') or {}, **sel)
         if mode is not None:
             if mode not in MODES:
                 raise HardwareError('Unknown hardware configuration "%s".' % mode)
             kw['mode'] = mode
             kw['mode_source'] = source
+            if mode != cur['mode'] and selection is None:
+                # a new configuration starts from its own defaults (Planning choices made for
+                # another configuration must not come back later by themselves)
+                kw['selection'] = {}
         if topics is not None:
             clean = {}
             for role in ROLES:
@@ -593,6 +618,10 @@ class Hardware:
             return False, None, [], []
         age, names, vals = self.ros.sample(topic)
         live = age is not None and age <= ROS_LIVE_S and bool(names)
+        if live and self.sim.owns(topic):
+            # the simulated robot publishes this topic: only another publisher is an arm
+            pubs = self.ros.foreign_publishers(topic)
+            live = bool(pubs)
         if live and role == 'leader':
             pubs = self.ros.foreign_publishers(topic)
             own_active = bool(self.jog and self.jog['proc'].poll() is None) or bool(
@@ -611,7 +640,9 @@ class Hardware:
         for role, t in setup['topics'].items():
             topics[t] = ('trajectory_msgs/msg/JointTrajectory' if role == 'leader' else
                          'sensor_msgs/msg/JointState')
-        self.ros.watch(topics if setup['mode'] != 'simulation' else {})
+        cams = setup.get('cameras') or {}
+        self.ros.watch(topics if setup['mode'] != 'simulation' else {},
+                       publishers_of=[setup['topics'].get('follower')] + list(cams.values()))
         ps = self.refresh_ports()
         regs = self.reg.devices()
         arms = {r: self._arm(robot_type, r, setup, ps) for r in ROLES}
@@ -633,6 +664,7 @@ class Hardware:
                  'command_publishers': self.ros.foreign_publishers(
                      setup['topics'].get('leader')) if setup['topics'].get('leader') else None}
         caps = capmod.compute(setup['mode'], arms, extra)
+        plan = self._planning(robot_type, setup, arms, caps, extra)
         return {
             'robot_type': robot_type, 'mode': setup['mode'], 'mode_label': MODES[
                 setup['mode']]['label'], 'mode_source': setup.get('mode_source'),
@@ -642,7 +674,8 @@ class Hardware:
             'scan_supported': bool(motor_spec(robot_type)),
             'platform_ports': portmod.supported(),
             'arms': arms, 'unassigned': unassigned, 'capabilities': caps,
-            'recording_gate': capmod.recording_gate(setup['mode'], caps),
+            'recording_gate': plan['record'],
+            'planning': plan, 'sim': plan['sim'],
             'ros': {'connected': self.ros.connected, 'error': self.ros.error,
                     'url': self.ros.url},
             'sessions': {'calibration': self._calib_view(), 'jog': self._jog_view()},
@@ -650,6 +683,89 @@ class Hardware:
             'event_seq': self.event_seq,
             'checked_at': now_iso(),
         }
+
+    def _planning(self, robot_type, setup, arms, caps, extra):
+        mode = setup['mode']
+        ft = setup['topics'].get('follower')
+        run = mode == 'simulation' or bool(setup.get('sim_twin'))
+        own_reason = ''
+        if not ft:
+            own_reason = 'The follower state topic of the robot configuration is not known yet.'
+        elif 'follower' in MODES[mode]['arms']:
+            own_reason = ('The configuration has a physical follower: its joint states are '
+                          'the recorded state.')
+        else:
+            others = self.ros.foreign_publishers(ft)
+            if others:
+                own_reason = ('%s already publishes %s: stop it to record the simulated robot.'
+                              % (', '.join(others), ft))
+        names = setup.get('joints') or None
+        if not names:
+            for role in ('follower', 'leader'):
+                t = setup['topics'].get(role)
+                if t and not self.sim.owns(t):
+                    n = self.ros.sample(t)[1]
+                    if n:
+                        names = n
+                        break
+        self.sim.ensure(robot_type, run, setup['topics'], names=names,
+                        state_topic=ft if (run and not own_reason) else None)
+        sim = self.sim.view()
+        sim.update(can_own_state=not own_reason, own_reason=own_reason, twin=bool(
+            setup.get('sim_twin')))
+        compare = None
+        if sim['running'] and ft and not self.sim.owns(ft) and \
+                arms['follower'].get('state') == 'connected':
+            compare = self.sim.compare(self.ros.sample(ft))
+        cams = [{'name': k, 'topic': t, 'live': (None if self.ros.foreign_publishers(t) is None
+                                                  else bool(self.ros.foreign_publishers(t)))}
+                for k, t in sorted((setup.get('cameras') or {}).items())]
+        out = planmod.options(mode, arms, caps, sim, setup.get('selection'), cams, {
+            'jog_running': extra.get('jog_active'), 'compare': compare,
+            'calibration_active': extra.get('calibration_active')})
+        # what drives the simulated robot follows the selection: the leader arm, a mirror of
+        # the physical follower (physical-to-simulation), or the operator (manual / script /
+        # replay, started from the Planning page)
+        key = (robot_type, out['selection'].get('action'), out['selection'].get('target'),
+               sim['running'])
+        changed, self._sim_key = key != getattr(self, '_sim_key', None), key
+        if sim['running'] and changed:     # only when the choice changes, not on every poll
+            want = planmod.sim_drive(out['selection'])
+            cur = self.sim.drive
+            if want and cur != want or (not want and cur in ('leader', 'follower')):
+                try:
+                    self.sim.command({'command': 'drive', 'drive': want or 'manual'})
+                except ValueError:
+                    pass
+                sim = dict(sim, **self.sim.view())
+        out['sim'] = sim
+        return out
+
+    def sim_command(self, robot_type, body):
+        if robot_type and robot_type != self.sim.robot_type:
+            self.status(robot_type)
+        if body.get('command') == 'replay' and body.get('capture'):
+            # a saved trajectory capture (leader arm or simulated robot) replayed in simulation
+            rec = self.reg.capture(str(body['capture']))
+            if not rec:
+                raise HardwareError('Capture %s not found.' % body['capture'], 404)
+            body = dict(body, names=rec['names'], t=[s[0] for s in rec['samples']],
+                        rows=[s[1:] for s in rec['samples']],
+                        label=body.get('label') or 'capture %s' % rec['id'])
+        if body.get('command') == 'capture_stop':
+            got = self.sim.take_capture()
+            if not got:
+                raise HardwareError('No trajectory was captured.')
+            saved = self.reg.save_capture(robot_type or self.sim.robot_type, 'sim', got[0],
+                                          got[1], 'sim')
+            out = self.status(robot_type or self.active_robot)
+            out['saved_capture'] = saved
+            return out
+        try:
+            self.sim.command(body)
+        except ValueError as e:
+            raise HardwareError(str(e))
+        return self.status(robot_type or self.active_robot)
 
     def _arm(self, robot_type, role, setup, ps):
         used = role in MODES[setup['mode']]['arms']
@@ -1201,6 +1317,12 @@ class Hardware:
             ctl.update(command='cancel', t=time.time())
             atomic_write_json(self.calib['dir'] / 'control.json', ctl)
             done.append('calibration')
+        if self.sim.running and self.sim.drive != 'manual':
+            try:
+                self.sim.command({'command': 'stop'})
+                done.append('simulated robot')
+            except ValueError:
+                pass
         rt = self.active_robot
         self._event(rt, 'estop', 'Emergency stop (%s): %s.' % (
             source, ', '.join(done) if done else 'nothing was moving'), 'err')
@@ -1222,8 +1344,14 @@ class Hardware:
 
     def stop(self):
         self._stop = True
+        self.sim.stop()
         for k in list(self.monitors):
             self._stop_monitor(*k, wait=1.0)
+
+
+def _bridge(url):
+    from physios_trainer.rollout_worker import Bridge
+    return Bridge(url)
 
 
 def _token(cfg):

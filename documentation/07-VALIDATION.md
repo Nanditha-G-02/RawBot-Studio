@@ -80,6 +80,29 @@ afterwards, Stage 1 registration, hardware choice, verification holding Planning
 later stages are done), and the flow in dark mode. The 26-step walk-through (now through the
 flow), `hw_ui_check.py` 9/9 and the Optimize check pass.
 
+### Hardware-aware Planning (16 Nov 2026)
+
+`trainer_tests/test_planning_setup.py` **14 passed**: the choices and recording decision for
+Leader + Follower, Leader Only (with and without the simulated twin), Follower Only (hand guiding,
+direct control), Simulation Only (cameras must publish; unknown publishers do not block),
+Physical + Simulated (mirror, comparison, leader drives the simulation); a stored choice that no
+longer fits falls back to the configuration default and is reset when the configuration changes;
+the simulated robot's joint speed, dead-man, scripts, replays, captures, and that it yields the
+follower topic to a real publisher. `test/planning` **46 passed** (a take keeps how it was
+recorded).
+
+`tests/e2e/plan_hw_check.py` **6/6** in the browser: the five configurations above with their
+controls (sliders, held keyboard keys, waypoint script, dataset and capture replay, trajectory
+capture, keyboard direct control of the follower), the Record page control, a plan episode
+recorded with the simulated robot keeping its setup, both themes. `hw_ui_check.py` 9/9 (two
+expectations updated: Leader Only now points to the simulated twin; Simulation Only records the
+simulated robot), `setup_flow_check.py` 10/10, the 26-step walk-through with simulated arms and
+with `--hardware none`.
+
+**Not validated:** recording the simulated robot through the real physical_ai_server (the
+stand-in recorder writes synthetic joint data), a real gamepad, the real `bridge.py` together
+with the simulated robot on one ROS graph.
+
 ## 3. Deployment validation
 
 | Path | What was run | Result |

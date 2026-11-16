@@ -460,6 +460,7 @@ export default function EpisodeViewer({ datasetId, episodeIndex, call, onReviewe
               ['Frames', <span className="num">{data.frames}</span>],
               ['Plan', plan ? `${plan.plan_name} · ${plan.episode_id} · v${plan.plan_version}` : 'Not recorded from a plan'],
               plan && plan.superseded && ['Note', 'Superseded by a later retake of the same plan episode.'],
+              plan?.setup && ['Recorded with', <span data-episode-setup>{`${plan.setup.action} → ${plan.setup.target} · state from ${plan.setup.observation} (${plan.setup.config})`}</span>],
               cfg && ['Instruction', cfg.instruction],
               cfg && ['Scenario', `${cfg.scenario?.name} (${cfg.scenario?.kind})`],
               ['File check', data.check?.ok ? 'OK' : (data.check?.problems || []).join('; ') || '—'],

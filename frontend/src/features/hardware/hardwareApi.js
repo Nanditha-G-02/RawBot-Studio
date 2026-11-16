@@ -30,6 +30,9 @@ export const hwConnect = (rt, role) => post('connect', rt, { role }, 60000);
 export const hwDisconnect = (rt, role) => post('disconnect', rt, { role });
 export const hwEstop = (source = 'page') => post('estop', '', { source });
 export const hwActionSource = (rt, supported) => post('action-source', rt, { supported });
+// the simulated robot (hardware/simbot.py) and the Planning choices (hardware/planning.py)
+export const hwSim = (rt, body) => post('sim', rt, body, 6000);
+export const hwPlanning = (rt, body) => post('setup', rt, body);
 
 export const calStart = (rt, role, mode = 'calibrate', profileId) =>
   post('calibration', rt, { role, mode, profile_id: profileId }, 30000);
@@ -64,6 +67,21 @@ export function topicsFromParams(params) {
     else if (k.startsWith('leader') && !out.leader) out.leader = t;
   });
   return out;
+}
+
+// camera_topic_list entries look like "global:/camera/color/image_raw/compressed"
+export function camerasFromParams(params) {
+  const out = {};
+  (params?.camera_topic_list || []).forEach((e) => {
+    const i = e.indexOf(':');
+    if (i > 0) out[e.slice(0, i).trim()] = e.slice(i + 1).trim();
+  });
+  return out;
+}
+
+export function jointsFromParams(params) {
+  const jo = params?.joint_order || {};
+  return jo.leader || Object.values(jo)[0] || [];
 }
 
 export const MODE_OPTIONS = [

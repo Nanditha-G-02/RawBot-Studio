@@ -229,6 +229,18 @@ The training service keeps a small hardware manager (`backend/physios_trainer/ha
   `follower`); the interface sets it to `follower` for Follower Only, and the recorder then saves
   the follower's joints as the action (hand-guided recording).
 
+* `planning.py` turns the same status into the Planning choices (action source, target robot,
+  observation), each with a reason when it does not fit, and decides for the current choice
+  whether a demonstration can be recorded and how physical_ai_server takes the action
+  (`action_source`: `leader` for the leader arm and supervised direct control, `follower` for
+  hand guiding and the simulated robot).
+* `simbot.py` is the simulated robot: a kinematic joint model in the training service, driven by
+  GUI targets, held keyboard / gamepad velocities (0.3 s dead-man), a script, a recorded
+  trajectory, the leader arm, or a mirror of the physical follower. It publishes
+  `/rawbot/sim/joint_states` and, only when no physical follower or other node owns it, the
+  follower state topic, so the recorder and the dataset format are unchanged. It never
+  publishes on the command topic.
+
 `bridge.py` keeps ownership of the serial ports. Everything that moves an arm goes through it
 over ROS, as before.
 
@@ -244,7 +256,8 @@ own REST API (`/api/v1`) remains available for scripts and tools.
 | Action | Who can trigger it | Guard |
 |---|---|---|
 | Recording | Start take / Start recording | operator click; the human leader arm drives the follower (Follower Only: the operator moves the follower by hand) |
-| Follower jog (Follower Only / both arms) | Robots → Hardware setup → Start direct control | dataset limits reviewed, server token, three checks; one joint, only while held (0.3 s dead-man), speed and lead caps, stale-data / page-heartbeat / foreign-publisher holds; refused during teleoperation, rollout or calibration |
+| Simulated robot | Planning / Record → Robot & control | publishes only joint states; never the command topic, so no physical motion; takes the follower state topic only when no other node publishes it; stopped by *Stop all* |
+| Follower jog (Follower Only / both arms) | Robots → Hardware setup or Planning → Robot & control → Start direct control (± buttons, keyboard or gamepad) | dataset limits reviewed, server token, three checks; one joint, only while held (0.3 s dead-man), speed and lead caps, stale-data / page-heartbeat / foreign-publisher holds; refused during teleoperation, rollout or calibration |
 | Calibration | Robots → Hardware setup → Calibrate | only on a free port (bridge.py stopped); torque off, never commands motion; cancel or lost page heartbeat writes the original values back |
 | Emergency stop | *Stop all* on the page, or `./scripts/estop.sh` without a browser | stops jog and host rollout (killed 0.5 s later), cancels calibration |
 | On-robot inference | Inference · Container inference → Start | operator click (over `/ros`); the gateway's `POST /api/v1/ros/task` keeps its `"confirm": true` rule (HTTP 428) for scripts |

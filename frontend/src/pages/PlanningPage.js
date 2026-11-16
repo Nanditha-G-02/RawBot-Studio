@@ -26,6 +26,7 @@ import { setEditingPlanId, setRecordMode } from '../features/planning/planningSl
 import { moveToPage } from '../features/ui/uiSlice';
 import PageType from '../constants/pageType';
 import WorkspaceCanvas from '../features/planning/WorkspaceCanvas';
+import PlanningSetup from '../features/planning/PlanningSetup';
 import StrategyConfig, { combinationCount } from '../features/planning/StrategyConfig';
 import {
   ItemsEditor,
@@ -397,6 +398,7 @@ export default function PlanningPage() {
 
       {/* editor */}
       <div className="flex-1 min-w-0 flex flex-col min-h-0">
+        <PlanningSetup />
         {!plan || !draft ? (
           <div className="flex-1 grid place-items-center p-8">
             <Empty

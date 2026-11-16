@@ -32,6 +32,7 @@ import * as api from './hardwareApi';
 import { MODE_OPTIONS, STATE_LABEL, stateTone } from './hardwareApi';
 import { setHardwareStatus } from './hardwareSlice';
 import { refreshHardware } from './HardwareMonitor';
+import useHeldInput from '../sim/useHeldInput';
 
 const ROLE_NAME = { leader: 'Leader arm', follower: 'Follower arm' };
 const fmt = (v, d = 3) => (v === null || v === undefined || !Number.isFinite(Number(v)) ? '—' : Number(v).toFixed(d));
@@ -589,7 +590,9 @@ const JOG_CHECK = [
   ['watching', 'I will watch the arm the whole time.'],
 ];
 
-function JogPanel({ robotType, status, cap }) {
+// input: 'gui' (hold the ± buttons, the original), 'keyboard' or 'gamepad' (the held key or
+// stick picks the joint and direction; still one joint at a time, only while held)
+export function JogPanel({ robotType, status, cap, input = 'gui' }) {
   const { call } = usePlanningService();
   const [names, setNames] = useState([]);
   const [limits, setLimits] = useState([]);
@@ -669,6 +672,16 @@ function JogPanel({ robotType, status, cap }) {
     held.current = null;
     api.jogCommand(sessionId, { command: 'release' }).catch(() => {});
   };
+  const { pad } = useHeldInput({
+    names: session?.names || names,
+    keyboard: !!live && input === 'keyboard',
+    gamepad: !!live && input === 'gamepad',
+    onTick: (v) => {
+      const k = Object.keys(v).sort((x, y) => Math.abs(v[y]) - Math.abs(v[x]))[0];
+      if (!k) release();
+      else if (!held.current || held.current.joint !== k || held.current.dir !== Math.sign(v[k])) press(k, Math.sign(v[k]));
+    },
+  });
 
   if (!cap.available && !live) {
     return (
@@ -738,6 +751,15 @@ function JogPanel({ robotType, status, cap }) {
         </div>
       ) : (
         <div className="space-y-3" data-jog-live={session.phase}>
+          {input !== 'gui' && (
+            <div className="text-[12px]" data-jog-input={input}>
+              {input === 'gamepad' ? (
+                <StatusDot tone={pad ? 'ok' : 'idle'} label={pad ? pad.slice(0, 60) : 'No gamepad - connect one and press any button'} />
+              ) : (
+                <span className="text-ink-3">Hold Q/A, W/S, E/D, R/F, T/G, Y/H for joints 1-6 (+/−).</span>
+              )}
+            </div>
+          )}
           <div className="flex items-center gap-3 flex-wrap">
             <StatusDot tone={session.phase === 'moving' ? 'warn' : session.phase === 'stale' ? 'err' : 'ok'} pulse={session.phase === 'moving'} label={session.phase === 'moving' ? `Moving ${session.moving}` : session.phase === 'stale' ? 'Holding - no fresh joint states' : 'Holding position'} />
             <span className="text-[11.5px] text-ink-3">{session.commands_sent || 0} commands sent</span>

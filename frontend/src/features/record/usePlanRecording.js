@@ -81,6 +81,17 @@ export function usePlanRecording(active) {
   const state = useSelector((s) => s.planning.recordState);
   const selectedId = useSelector((s) => s.planning.selectedEpisodeId);
   const phase = useSelector((s) => s.tasks.taskStatus.phase);
+  // how the take is recorded (Planning → Robot & control), kept with the attempt
+  const hwPlan = useSelector((s) =>
+    !s.hardware.offline && s.hardware.status?.robot_type === s.tasks.taskStatus.robotType ? s.hardware.status.planning : null
+  );
+  const setup = useMemo(
+    () =>
+      hwPlan
+        ? { config: hwPlan.config, ...hwPlan.selection, action_param: hwPlan.record.action_param, cameras: hwPlan.cameras.map((c) => c.topic) }
+        : null,
+    [hwPlan]
+  );
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const lastPhase = useRef(phase);
@@ -151,7 +162,7 @@ export function usePlanRecording(active) {
       const retake = st === 'validated' || st === 'recorded' || opts.retake;
       let begin;
       try {
-        begin = await call('record.begin', { plan_id: plan.id, episode_id: current.id, retake });
+        begin = await call('record.begin', { plan_id: plan.id, episode_id: current.id, retake, ...(setup ? { setup } : {}) });
       } catch (e) {
         return { success: false, message: e.message };
       }
@@ -171,7 +182,7 @@ export function usePlanRecording(active) {
       refresh();
       return res;
     },
-    [plan, current, progress, call, callService, dispatch, refresh]
+    [plan, current, progress, call, callService, dispatch, refresh, setup]
   );
 
   const skip = async (episodeId, reason) => {

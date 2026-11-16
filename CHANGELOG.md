@@ -2,6 +2,21 @@
 
 ## 2.0.0, renamed (2026-11-13)
 
+* **Planning adapts to the hardware.** *Robot & control* at the top of Planning (and on Record)
+  shows the configuration, the physical and simulated robots, cameras and whether recording is
+  possible now, and offers only the compatible action sources (leader arm, hand guiding, GUI,
+  keyboard, gamepad, script, trajectory replay), target robots (physical follower, simulated
+  robot) and observations; the rest are greyed out with a short reason. It updates as arms come
+  and go.
+  * New simulated robot (training service): GUI sliders, held keyboard / gamepad, waypoint
+    scripts, replay of dataset episodes and captures, joint-only trajectory capture; it can
+    mirror the physical follower (with a real-vs-simulation table) or follow the leader.
+  * Leader Only and Simulation Only can now record demonstrations: the simulated robot is
+    recorded as the follower (same dataset format). The physical follower can be driven by
+    keyboard or gamepad through the supervised direct control.
+  * Each plan take stores how it was recorded; Data shows it.
+  * Tests: `trainer_tests/test_planning_setup.py`, `tests/e2e/plan_hw_check.py`.
+
 * **Guided robot setup before Planning:** Robot → Model file → Hardware → Verify → Planning
   (Robots → Robot setup; Home's *Continue* and *Add Custom Robot* open it).
   * Adding a custom robot starts with its URDF / Xacro (or ZIP). The name is taken from the

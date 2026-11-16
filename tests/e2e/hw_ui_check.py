@@ -205,7 +205,7 @@ with sync_playwright() as p:
     wait_state('follower', 'connected')
 
     # ------------------------------------------------------------------ 2. leader only
-    step('2 Leader Only: follower unused, leader monitoring and capture, no recording')
+    step('2 Leader Only: follower unused, leader monitoring and capture, recording needs the simulated twin')
     mode(page, 'leader_only')
     expect(page.locator('[data-home-arm="follower"]')).to_contain_text('Not used')
     open_hw(page)
@@ -220,7 +220,8 @@ with sync_playwright() as p:
     page.locator('[data-action="capture-stop"]').click()
     expect(page.get_by_text(re.compile(r'Saved \d+ samples'))).to_be_visible(timeout=10000)
     shot(page, 'hw06_leader_only')
-    record_blocked(page, 'Needs Leader + Follower')
+    # recording needs a follower: here, the simulated robot (Planning → Robot & control)
+    record_blocked(page, 'turn on Simulated twin')
 
     # ---------------------------------------------------------------- 3. follower only
     step('3 Follower Only: hand-guided recording, direct control (jog) once teleop is off')
@@ -291,14 +292,16 @@ with sync_playwright() as p:
     shot(page, 'hw11_after_calibration')
 
     # ----------------------------------------------------------- 4. simulation only
-    step('4 Simulation Only: arms not used, recording and inference explain why')
+    step('4 Simulation Only: arms not used, inference explains why, the simulated robot records')
     mode(page, 'simulation')
     open_hw(page)
     cap(page, 'simulation', True)
     cap(page, 'record', False)
     cap(page, 'inference', False)
     shot(page, 'hw12_simulation')
-    record_blocked(page, 'Simulation Only is selected')
+    # the simulated robot is the recorded robot in Simulation Only (plan_hw_check.py)
+    nav(page, 'Record')
+    expect(page.locator('[data-plan-setup="compact"]')).to_be_visible(timeout=12000)
     nav(page, 'Inference')
     expect(page.get_by_text('Simulation Only is selected').first).to_be_visible(timeout=10000)
     page.locator('[data-theme-option="dark"]').click()

@@ -200,9 +200,17 @@ class Robot:
                     'sensor_msgs/msg/JointState'}
         if name == '/rosapi/publishers':
             extra = os.environ.get('STANDIN_EXTRA_PUBLISHER')
-            teleop = ['/so101_bridge'] if (self.teleop and 'leader' in args.get('topic', '')
+            topic = args.get('topic', '')
+            teleop = ['/so101_bridge'] if (self.teleop and 'leader' in topic
                                            and self.robot_type) else []
-            return {'publishers': ['/rosbridge_websocket'] + teleop + ([extra] if extra else [])}
+            # like ROS: the cameras and bridge.py's follower state have their own nodes
+            own = []
+            if topic.startswith(('/camera', '/gripper_camera')) and self.robot_type:
+                own = ['/camera_node']
+            elif topic == '/joint_states' and self.follower_on and self.robot_type:
+                own = ['/so101_bridge']
+            return {'publishers': ['/rosbridge_websocket'] + teleop + own +
+                    ([extra] if extra else [])}
         if name == '/standin/set_teleop':
             self.teleop = bool(args.get('enabled'))
             if 'follower' in args:
@@ -284,6 +292,9 @@ class Robot:
                     with open(self.commands_file, 'a') as f:
                         f.write(json.dumps({'t': self.command_t, 'names': m['msg'].get(
                             'joint_names'), 'positions': self.command}) + '\n')
+                elif op == 'publish' and m.get('topic'):
+                    # relayed to subscribers, like rosbridge (RawBot Studio's simulated robot)
+                    await self.publish(m['topic'], m.get('msg') or {})
                 elif op == 'unsubscribe':
                     self.subs[ws].discard(m['topic'])
         finally:

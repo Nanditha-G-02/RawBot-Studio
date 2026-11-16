@@ -34,6 +34,7 @@ import PlanRecordPanel from '../features/record/PlanRecordPanel';
 import { usePlanRecording } from '../features/record/usePlanRecording';
 import TaskPhase from '../constants/taskPhases';
 import useHardwareGate, { useHardwareStatus } from '../features/hardware/useHardwareGate';
+import PlanningSetup, { selectionText } from '../features/planning/PlanningSetup';
 
 export default function RecordPage({ isActive = true }) {
   const dispatch = useDispatch();
@@ -87,7 +88,12 @@ export default function RecordPage({ isActive = true }) {
   const reviewBlocks = planMode && !!reviewItem;
   // Leader + Follower records teleoperated demos; Follower Only records hand-guided ones
   const hwBlock = useHardwareGate('recording');
-  const handGuided = useHardwareStatus()?.mode === 'follower_only';
+  const hw = useHardwareStatus();
+  const planSetup = hw?.planning;
+  const handGuided = planSetup ? planSetup.selection.action === 'hand_guided' : hw?.mode === 'follower_only';
+  // the operator drives something from this page (simulated robot, or direct control of the
+  // follower): show its control above the side panel
+  const showControl = !!planSetup && (planSetup.selection.target === 'sim' || ['gui', 'keyboard', 'gamepad'].includes(planSetup.selection.action));
   const counts = rec.state?.counts;
   const [camOpen, setCamOpen] = useState(false);
   const camCheck = useSelector((s) => s.planning.cameraCheck);
@@ -295,6 +301,11 @@ export default function RecordPage({ isActive = true }) {
                 Hand-guided · follower torque off
               </span>
             )}
+            {planSetup && !handGuided && (
+              <span className="chip shadow-sm bg-white" data-record-setup={`${planSetup.selection.action}|${planSetup.selection.target}`} title={`${planSetup.config_label}. Change it in Planning → Robot & control.`}>
+                {selectionText(planSetup)}
+              </span>
+            )}
             <div
               className="flex items-center gap-2 border border-ink bg-white px-2.5 py-1 shadow-sm"
               title="When ON, every saved episode is shown for approval before you continue (plan mode) or in a side panel (free recording)."
@@ -364,6 +375,11 @@ export default function RecordPage({ isActive = true }) {
           </button>
           <div className={classRightPanel}>
             <div className="w-full min-h-10"></div>
+            {showControl && (
+              <div className="w-full max-h-[55%] overflow-y-auto scroll-thin border-l border-t border-ink">
+                <PlanningSetup compact />
+              </div>
+            )}
             {planMode ? (
               <div className="w-full flex-1 min-h-0 bg-white border-l border-t border-ink">
                 <PlanRecordPanel rec={rec} />

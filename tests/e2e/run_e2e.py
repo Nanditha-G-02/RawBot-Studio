@@ -76,7 +76,7 @@ with sync_playwright() as p:
     names = page.locator('input[aria-label="Item name"]')
     names.nth(0).fill('red cube')
     names.nth(1).fill('tray')
-    page.get_by_role('switch').first.click()  # workspace verified
+    page.get_by_role('switch').filter(has_text='Verified').click()  # workspace verified
     time.sleep(1.5)
     shot(page, '03_planning_define')
 

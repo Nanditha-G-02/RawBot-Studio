@@ -31,9 +31,11 @@ class FakeRos:
         self.error = None
         self.url = 'ws://127.0.0.1:9090'
         self.topics = {}
+        self.unknown = set()    # topics whose publishers rosapi cannot tell
 
-    def watch(self, topics):
+    def watch(self, topics, publishers_of=()):
         self.topics = dict(topics)
+        self.pub_topics = set(t for t in publishers_of if t)
 
     def publish(self, topic, names, values, publisher='/so101_bridge'):
         self.msgs[topic] = (time.time(), list(names), list(values))
@@ -51,6 +53,8 @@ class FakeRos:
         return time.time() - hit[0], hit[1], hit[2]
 
     def foreign_publishers(self, topic):
+        if topic in self.unknown:
+            return None
         return list(self.pubs.get(topic, []))
 
 

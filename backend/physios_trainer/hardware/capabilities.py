@@ -31,6 +31,24 @@ FEATURES = [
 LABEL = {k: l for k, l, _ in FEATURES}
 
 
+def arm_reason(mode, card, role):
+    """Why an arm cannot be used, in the operator's words."""
+    st = card.get('state')
+    name = role.capitalize()
+    if role not in MODES.get(mode, MODES['leader_follower'])['arms']:
+        return '%s is not part of the %s configuration.' % (name, MODES[mode]['label'])
+    return {
+        'disconnected': '%s arm was disconnected in RawBot Studio. Press Connect.' % name,
+        'lost': '%s arm stopped responding. Check its cable and power, then Reconnect.'
+                % name,
+        'in_use': card.get('detail') or '%s port is in use by another program.' % name,
+        'not_found': '%s arm is not plugged in.' % name,
+        'not_configured': 'No %s arm is set up. Use Detect Hardware.' % role,
+        'error': card.get('detail') or '%s arm did not pass the motor check.' % name,
+        'detected': '%s arm is detected but not connected. Press Connect.' % name,
+    }.get(st, '%s arm is not connected.' % name)
+
+
 def compute(mode, arms, extra=None):
     """mode: setup mode; arms: {'leader': card, 'follower': card}; extra: {
     'active_rollout': bool, 'jog_active': bool, 'calibration_active': bool,
@@ -46,20 +64,7 @@ def compute(mode, arms, extra=None):
         out[key] = {'label': LABEL[key], 'available': bool(ok), 'reason': '' if ok else reason}
 
     def why_arm(card, role):
-        st = card.get('state')
-        name = role.capitalize()
-        if role not in used:
-            return '%s is not part of the %s configuration.' % (name, MODES[mode]['label'])
-        return {
-            'disconnected': '%s arm was disconnected in RawBot Studio. Press Connect.' % name,
-            'lost': '%s arm stopped responding. Check its cable and power, then Reconnect.'
-                    % name,
-            'in_use': card.get('detail') or '%s port is in use by another program.' % name,
-            'not_found': '%s arm is not plugged in.' % name,
-            'not_configured': 'No %s arm is set up. Use Detect Hardware.' % role,
-            'error': card.get('detail') or '%s arm did not pass the motor check.' % name,
-            'detected': '%s arm is detected but not connected. Press Connect.' % name,
-        }.get(st, '%s arm is not connected.' % name)
+        return arm_reason(mode, card, role)
 
     def why_ros(card, role, what):
         if card.get('state') == 'connected' and card.get('source') == 'serial':
