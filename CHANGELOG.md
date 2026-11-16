@@ -2,6 +2,18 @@
 
 ## 2.0.0, renamed (2026-11-13)
 
+* **Guided robot setup before Planning:** Robot → Model file → Hardware → Verify → Planning
+  (Robots → Robot setup; Home's *Continue* and *Add Custom Robot* open it).
+  * Adding a custom robot starts with its URDF / Xacro (or ZIP). The name is taken from the
+    model; details are optional and edited after the check report and 3D view.
+  * Hardware: the configuration (Leader + Follower, Leader Only, Follower Only, Simulation
+    Only) and the arm setup of the previous change, inside the flow.
+  * Verify: live checklist (robot server, configuration, arms, calibration) for built-in
+    robots; configuration and readiness stages for custom robots, which reach Planning once
+    they are the active robot type.
+  * Tests: `tests/e2e/setup_flow_check.py` (built-in and custom paths); the 26-step walk-through
+    goes through the flow.
+
 * **Flexible robot setup: no longer needs both arms.** After choosing a robot on Home you pick
   what you have: Leader + Follower (the default; existing projects keep it), Leader Only,
   Follower Only or Simulation Only.

@@ -143,7 +143,34 @@ The robot server lists one robot type per `<robot>_config.yaml`. The built-in on
 
 It is installed at every container start and survives image rebuilds.
 
-### 4.4 Hardware setup: which arms you have
+### 4.4 Robot setup: from robot to Planning
+
+Before Planning, RawBot Studio walks you through five steps (Robots → **Robot setup**, or from
+Home):
+
+1. **Robot.** Choose a robot the robot server knows (on Home: pick it and press Confirm), open
+   one of your custom robots, or add a custom robot.
+2. **Model file** (custom robots only). Upload the `.urdf` / `.xacro` with its meshes, or a
+   ZIP of the robot package, first. The robot's name is taken from the model
+   (`<robot name="...">`); the check report and a 3D view follow, and the details
+   (name, manufacturer, type, description) are optional and can be edited there. *Register
+   model & continue* completes Stage 1.
+3. **Hardware.** Choose Leader + Follower, Leader Only, Follower Only or Simulation Only, and
+   detect, connect and calibrate the arms (section 4.5). For a custom robot you choose the
+   configuration; its hardware is checked in step 4.
+4. **Verify.** Built-in robots: the robot server uses this robot, the configuration, the arms
+   it needs and their calibration, live. Only a robot server that has not confirmed the robot
+   stops you; missing arms or calibration are warnings, because planning never moves the
+   robot. Custom robots: the robot configuration (joints, topics, units) and the readiness
+   stages (ROS checks, supervised one-joint hardware test, exporting the server config);
+   Planning opens once the robot is the active robot type.
+5. **Planning.** A summary, then *Continue to Planning*.
+
+On Home, *Continue: hardware & verify →* opens step 3 for the confirmed robot, and *Add Custom
+Robot* opens step 2. The sidebar's Planning page is still reachable directly once a robot is
+confirmed.
+
+### 4.5 Hardware setup: which arms you have
 
 RawBot Studio no longer needs both arms. After you confirm a robot on Home, the **Hardware
 setup** row under the robot list sets what this robot has:
@@ -319,6 +346,7 @@ python3 tests/e2e/devstack.py /tmp/physios-dev [--seed]                 # termin
 python3 tests/e2e/run_e2e.py http://127.0.0.1:8700 /tmp/physios-shots   # 26 steps
 python3 tests/e2e/opt_ui_check.py http://127.0.0.1:8700                 # Optimize tab (needs --seed)
 python3 tests/e2e/hw_ui_check.py http://127.0.0.1:8700 /tmp/physios-dev # hardware setup scenarios
+python3 tests/e2e/setup_flow_check.py http://127.0.0.1:8700             # guided robot setup
 cd backend && PHYSIOS_PORT=8710 PHYSIOS_AUTH_TOKEN=lab-operator-2026 python3 -m physios_gateway &
 python3 tests/e2e/auth_e2e.py http://127.0.0.1:8710 lab-operator-2026   # sign-in, 6 steps
 ```

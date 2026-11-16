@@ -18,12 +18,12 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { Callout, Empty, Sheet, Spinner } from '../components/ui';
-import AddRobotWizard from '../features/robots/AddRobotWizard';
 import RobotDetail, { StageBadge } from '../features/robots/RobotDetail';
 import { ROBOT_TYPE_LABELS, listRobots } from '../features/robots/robotsApi';
 import { robotExtraTabs } from '../features/robots/RobotSetup';
 import { setRobotsView } from '../features/ui/uiSlice';
 import HardwareSetup from '../features/hardware/HardwareSetup';
+import SetupFlow from '../features/setup/SetupFlow';
 
 export default function RobotsPage() {
   const dispatch = useDispatch();
@@ -52,9 +52,13 @@ export default function RobotsPage() {
         <header className="flex items-end justify-between gap-4 flex-wrap">
           <div>
             <div className="label">Robots</div>
-            <h1 className="text-[24px] font-semibold tracking-tight">{view.mode === 'hardware' ? 'Hardware setup' : 'Custom robot library'}</h1>
+            <h1 className="text-[24px] font-semibold tracking-tight">
+              {view.mode === 'setup' ? 'Robot setup' : view.mode === 'hardware' ? 'Hardware setup' : 'Custom robot library'}
+            </h1>
             <p className="text-[13px] text-ink-3 max-w-2xl">
-              {view.mode === 'hardware'
+              {view.mode === 'setup'
+                ? 'Choose the robot, add its model file if it is a custom robot, set up the hardware you have and verify it, then continue to Planning.'
+                : view.mode === 'hardware'
                 ? 'Choose which arms you have, detect and connect them one at a time, calibrate each arm and see what the connected hardware allows.'
                 : 'Add a robot from its URDF, check it, look at it in 3D, then configure and verify it step by step. Recording and training unlock only after the robot has been verified on hardware.'}
             </p>
@@ -62,10 +66,11 @@ export default function RobotsPage() {
           <div className="flex items-center gap-2">
             <div className="flex gap-0.5 rounded-full bg-paper p-[3px]" role="tablist" aria-label="Robots view">
               {[
-                ['hardware', 'Hardware setup'],
+                ['setup', 'Robot setup'],
+                ['hardware', 'Hardware'],
                 ['library', 'Custom robots'],
               ].map(([k, label]) => {
-                const on = k === 'hardware' ? view.mode === 'hardware' : view.mode !== 'hardware';
+                const on = k === 'library' ? !['setup', 'hardware'].includes(view.mode) : view.mode === k;
                 return (
                   <button
                     key={k}
@@ -73,7 +78,7 @@ export default function RobotsPage() {
                     role="tab"
                     aria-selected={on}
                     data-robots-tab={k}
-                    onClick={() => setView({ mode: k })}
+                    onClick={() => setView(k === 'setup' ? { mode: 'setup', step: 1 } : { mode: k })}
                     className={on ? 'rounded-full bg-ink px-3.5 py-1.5 text-[12.5px] font-medium text-white shadow-lift' : 'rounded-full px-3.5 py-1.5 text-[12.5px] text-ink-3 hover:text-ink'}
                   >
                     {label}
@@ -82,7 +87,7 @@ export default function RobotsPage() {
               })}
             </div>
             {view.mode === 'library' && (
-              <button className="btn-primary" onClick={() => setView({ mode: 'add' })} data-action="add-robot">
+              <button className="btn-primary" onClick={() => setView({ mode: 'setup', step: 2, kind: 'custom', customId: null })} data-action="add-robot">
                 + Add custom robot
               </button>
             )}
@@ -90,22 +95,15 @@ export default function RobotsPage() {
         </header>
 
         {view.mode === 'hardware' && <HardwareSetup />}
+        {view.mode === 'setup' && <SetupFlow />}
 
-        {error && view.mode !== 'hardware' && (
+        {error && view.mode === 'library' && (
           <Callout tone="err" title="The robot library is not reachable">
             {error} The library is kept by the RawBot Studio training service; start it with ./start_physios.sh.
           </Callout>
         )}
 
-        {view.mode === 'add' && (
-          <AddRobotWizard
-            onCancel={() => setView({ mode: 'library' })}
-            onCreated={(id) => {
-              load();
-              setView({ mode: 'detail', id });
-            }}
-          />
-        )}
+        {view.mode === 'add' && <SetupFlow />}
 
         {view.mode === 'detail' && view.id && (
           <RobotDetail robotId={view.id} onBack={() => setView({ mode: 'library' })} onChanged={load} extraTabs={robotExtraTabs} />
@@ -149,7 +147,7 @@ export default function RobotsPage() {
             ) : (
               <Empty
                 title="No custom robots yet"
-                action={<button className="btn-primary" onClick={() => setView({ mode: 'add' })}>+ Add custom robot</button>}
+                action={<button className="btn-primary" onClick={() => setView({ mode: 'setup', step: 2, kind: 'custom', customId: null })}>+ Add custom robot</button>}
               >
                 The SO-101 and other built-in robots are selected on Home. Add your own robot here from its URDF.
               </Empty>

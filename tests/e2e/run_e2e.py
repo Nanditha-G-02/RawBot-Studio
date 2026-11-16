@@ -57,7 +57,13 @@ with sync_playwright() as p:
 
     # ------------------------------------------------------------- Planning --
     step('Planning: create plan and define task')
-    page.get_by_role('button', name='Continue to Planning →').click()
+    # guided setup after Home: hardware (3) -> verify (4) -> ready (5) -> Planning
+    page.locator('[data-action="home-continue"]').click()
+    for n in (3, 4, 5):
+        expect(page.locator('[data-setup-flow]')).to_have_attribute('data-setup-at', str(n), timeout=15000)
+        if n < 5:
+            page.locator('[data-action="setup-next"]').click()
+    page.locator('[data-action="setup-to-planning"]').click()
     page.get_by_role('button', name='+ New').click()
     page.get_by_placeholder('red_cube_pick_place').fill('red_cube_e2e')
     page.get_by_placeholder('Pick up the {object} and place it in the {target}.').fill(

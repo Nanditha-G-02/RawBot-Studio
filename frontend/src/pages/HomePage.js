@@ -170,16 +170,18 @@ export default function HomePage() {
     }
   };
 
-  const go = (page) => {
-    if (page !== PageType.HOME && page !== PageType.DATA && !robotType) {
+  // after the robot: hardware (3), verification (4), then Planning (5)
+  const continueSetup = () => {
+    if (!robotType) {
       toast.error('Confirm a robot first.', { id: 'home-guard' });
       return;
     }
-    if (page === PageType.DATA && !linked) {
-      toast.error('Server is not reachable.', { id: 'home-guard' });
-      return;
-    }
-    dispatch(moveToPage(page));
+    const custom = customRobots.find((r) => r.id.toLowerCase().replace(/[^a-z0-9_]/g, '_') === robotType);
+    openRobots(
+      custom
+        ? { mode: 'setup', step: 3, kind: 'custom', customId: custom.id, robotType }
+        : { mode: 'setup', step: 3, kind: 'builtin', robotType, customId: null }
+    );
   };
 
   const confirmed = robotType && robotType === selected;
@@ -350,8 +352,8 @@ export default function HomePage() {
                         key={r.id}
                         type="button"
                         data-custom-robot={r.id}
-                        onClick={() => openRobots({ mode: 'detail', id: r.id })}
-                        title="Custom robot — open its profile (it is set up and verified there)"
+                        onClick={() => openRobots({ mode: 'setup', step: 2, kind: 'custom', customId: r.id })}
+                        title="Custom robot - continue its setup (model, hardware, verification)"
                         className="lg-tile group"
                       >
                         <span className="lg-icon">
@@ -369,7 +371,7 @@ export default function HomePage() {
                   <button
                     type="button"
                     data-action="add-custom-robot"
-                    onClick={() => openRobots({ mode: 'add' })}
+                    onClick={() => openRobots({ mode: 'setup', step: 2, kind: 'custom', customId: null })}
                     className="lg-tile lg-tile-add group"
                   >
                     <span className="lg-plus">+</span>
@@ -412,8 +414,8 @@ export default function HomePage() {
                   <p className="text-[12px] text-signal-warn">A task is running — the robot type is locked until it finishes.</p>
                 )}
 
-                <button className="lg-btn lg-btn-cta w-full py-3 text-[13.5px]" disabled={!robotType} onClick={() => go(PageType.PLANNING)}>
-                  Continue to Planning →
+                <button className="lg-btn lg-btn-cta w-full py-3 text-[13.5px]" disabled={!robotType} onClick={continueSetup} data-action="home-continue">
+                  Continue: hardware &amp; verify →
                 </button>
               </div>
             </section>

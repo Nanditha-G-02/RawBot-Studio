@@ -141,7 +141,7 @@ Images follow your GitHub theme (light or dark). Every page in both themes is in
 
 ```mermaid
 flowchart LR
-    A["🤖 Select robot"] --> B["🗺️ Plan<br/>task · episodes · approve"]
+    S["🤖 Set up the robot<br/>robot · model file · hardware · verify"] --> B["🗺️ Plan<br/>task · episodes · approve"]
     B --> C["🎥 Record<br/>leader → follower, 2 cameras"]
     C --> D["🗂️ Curate<br/>review · accept · publish"]
     D --> E["🧠 Train<br/>ACT · SmolVLA · …"]
@@ -150,6 +150,10 @@ flowchart LR
     F --> G["🦾 Run on the robot<br/>supervised inference"]
     G -->|"failures become new episodes"| B
 ```
+
+Setup is a guided five-step flow before Planning: choose a robot (or add a custom one), upload
+its URDF / Xacro if it is custom, choose the arms you have (Leader + Follower, Leader Only,
+Follower Only or Simulation Only), verify, then continue to Planning.
 
 One loop, one application: every step hands its result to the next (an approved plan drives
 recording, a curated dataset feeds training, evaluation results point back to the plan).

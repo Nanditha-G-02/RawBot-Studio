@@ -71,6 +71,15 @@ publishes the leader topic only during teleoperation), the real LeRobot Feetech 
 worker uses LeRobot's `FeetechMotorsBus` API as in LeRobot 0.6/0.7), and hand-guided recording
 in the rebuilt robot image.
 
+### Guided robot setup (16 Nov 2026)
+
+`tests/e2e/setup_flow_check.py` **10/10**: a built-in robot from Home through hardware (with
+Simulation Only skipping the arm checks), verification and the summary into Planning; a custom
+robot started from its model ZIP (file picker first, name taken from the URDF, details saved
+afterwards, Stage 1 registration, hardware choice, verification holding Planning until the
+later stages are done), and the flow in dark mode. The 26-step walk-through (now through the
+flow), `hw_ui_check.py` 9/9 and the Optimize check pass.
+
 ## 3. Deployment validation
 
 | Path | What was run | Result |
