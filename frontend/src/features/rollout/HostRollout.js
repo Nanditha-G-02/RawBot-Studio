@@ -27,6 +27,7 @@ import CameraMatchCheck from '../camera/CameraMatchCheck';
 import { OUTCOME_COLOR } from '../evaluation/EvaluationPanel';
 import { setRolloutTarget } from '../planning/planningSlice';
 import { Callout, Field, Modal, NumberInput, Select, Sheet, Spinner, TextInput } from '../../components/ui';
+import useHardwareGate from '../hardware/useHardwareGate';
 
 const PHASE = {
   starting: ['chip-sky', 'Starting'],
@@ -125,6 +126,7 @@ export default function HostRollout() {
   const [prep, setPrep] = useState(null);
   const [preparing, setPreparing] = useState(false);
   const [ack, setAck] = useState(false);
+  const hwBlock = useHardwareGate('policy_rollout');
   const [rollout, setRollout] = useState(null);
   const [moveConfirm, setMoveConfirm] = useState(false);
   const [log, setLog] = useState('');
@@ -527,9 +529,16 @@ export default function HostRollout() {
                         I reviewed this configuration. Load the model (the arm does not move until I press “Start moving”).
                       </span>
                     </label>
+                    {hwBlock && (
+                      <div data-rollout-hw-block>
+                        <Callout tone="warn" title="Not available with the connected hardware">
+                          {hwBlock}
+                        </Callout>
+                      </div>
+                    )}
                     <button
                       className="btn-primary justify-self-start"
-                      disabled={!prep.ok || !ack || preparing || !!prep.busy}
+                      disabled={!prep.ok || !ack || preparing || !!prep.busy || !!hwBlock}
                       onClick={start}
                       data-rollout-load
                     >

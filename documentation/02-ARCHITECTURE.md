@@ -201,7 +201,36 @@ Browser ─ RawBot Studio frontend ─┐
 | 06 Inference · Container inference | `/ros` (`/task/command` start_inference), `/camera-stream` | robot server inference |
 | 06 Inference · Host rollout | `/train-api/rollouts*` | `physios_trainer/rollout.py`, `rollout_worker.py` |
 | R Robots | `/train-api/robots/*`, `/ros` (ROS checks, hardware test) | `physios_trainer/robots` |
+| R Robots · Hardware setup (and the Home row) | `/train-api/hardware/*` | `physios_trainer/hardware` (ports, registry, manager, capabilities, `hw_worker.py`, `jog_worker.py`) |
 | (gateway) health, config, activity, auth | `/api/v1/*` | gateway |
+
+## Hardware setup
+
+The training service keeps a small hardware manager (`backend/physios_trainer/hardware/`):
+
+* `ports.py` lists USB serial adapters from sysfs (no device names assumed) and which
+  process holds each port (from `/proc`).
+* `registry.py` stores, per robot type, the configuration (Leader + Follower, Leader Only,
+  Follower Only, Simulation Only), the ROS topics of the arms, and the arms themselves: the role
+  is bound to the USB adapter's identity and checked against the motor IDs of a scan, never to
+  a port name. Calibration profiles and leader captures are files next to it.
+* `manager.py` combines the two sources of truth about an arm: RawBot Studio's own read-only
+  serial session (`hw_worker.py`, LeRobot's Feetech bus in the operator's environment; only on
+  a free port) and live joint messages on ROS from `bridge.py` (watched through rosbridge;
+  rosapi tells a real leader from RawBot Studio's own commands). A monitor thread re-checks
+  every 1.5 s, records events (unplugged, lost, reconnected), re-opens a wanted read-only
+  session, and switches a one-arm configuration to Leader + Follower when the other arm newly
+  appears.
+* `capabilities.py` turns the configuration and arm states into the list of features with a
+  reason for each one that is off. The interface reads it (`HardwareMonitor` polls every 2 s)
+  and disables Start on Record, Inference and host rollout with that reason. When the service
+  is not reachable, nothing is blocked (the earlier behaviour).
+* Recording: physical_ai_server has an `action_source` parameter (`leader`, the default, or
+  `follower`); the interface sets it to `follower` for Follower Only, and the recorder then saves
+  the follower's joints as the action (hand-guided recording).
+
+`bridge.py` keeps ownership of the serial ports. Everything that moves an arm goes through it
+over ROS, as before.
 
 ## Live data
 
@@ -214,7 +243,10 @@ own REST API (`/api/v1`) remains available for scripts and tools.
 
 | Action | Who can trigger it | Guard |
 |---|---|---|
-| Recording | Start take / Start recording | operator click; the human leader arm drives the follower |
+| Recording | Start take / Start recording | operator click; the human leader arm drives the follower (Follower Only: the operator moves the follower by hand) |
+| Follower jog (Follower Only / both arms) | Robots → Hardware setup → Start direct control | dataset limits reviewed, server token, three checks; one joint, only while held (0.3 s dead-man), speed and lead caps, stale-data / page-heartbeat / foreign-publisher holds; refused during teleoperation, rollout or calibration |
+| Calibration | Robots → Hardware setup → Calibrate | only on a free port (bridge.py stopped); torque off, never commands motion; cancel or lost page heartbeat writes the original values back |
+| Emergency stop | *Stop all* on the page, or `./scripts/estop.sh` without a browser | stops jog and host rollout (killed 0.5 s later), cancels calibration |
 | On-robot inference | Inference · Container inference → Start | operator click (over `/ros`); the gateway's `POST /api/v1/ros/task` keeps its `"confirm": true` rule (HTTP 428) for scripts |
 | Host rollout load | Inference · Host rollout → Load model | compatibility + checklist; worker publishes nothing |
 | Host rollout run | Inference · Host rollout → Start moving | second confirmation; worker enforces envelope, per-step limits, stale-data and heartbeat holds, duration cap; emergency stop kills the worker |

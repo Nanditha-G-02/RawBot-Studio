@@ -57,6 +57,7 @@ way.
 | Feature | What it does |
 |---|---|
 | **🤖 Robot selection** | Pick a built-in arm (SO-101, OpenMANIPULATOR-X/Y) or a custom robot, with live server link, robot heartbeat and an animated 3D arm. |
+| **🔌 Flexible hardware setup** | Work with Leader + Follower, Leader Only, Follower Only or no robot at all. Detect arms by their USB identity, connect and calibrate each one on its own, and see what the connected hardware allows; features turn on and off as arms are plugged in or lost. |
 | **🗺️ Collection planning** | Define the task, choose a planning type (static, semi-dynamic, dynamic, randomized, sequential, scenario-based), edit every episode on a workspace map, validate and approve a frozen plan. |
 | **🎥 Recording** | Plan mode records the approved plan episode by episode; free recording for ad-hoc demos. Original, processed, 3D simulation and multi-panel camera views, plus a camera check against the training data. |
 | **🗂️ Dataset curation** | Overview and health of each LeRobot dataset, episode playback with joint timelines and automatic grasp phases, accept/reject reviews, publishing to Hugging Face and GitHub. |

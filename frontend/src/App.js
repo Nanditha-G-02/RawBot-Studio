@@ -30,6 +30,7 @@ import InferencePage from './pages/InferencePage';
 import TrainingPage from './pages/TrainingPage';
 import LocalTrainingPage from './pages/LocalTrainingPage';
 import RobotsPage from './pages/RobotsPage';
+import HardwareMonitor from './features/hardware/HardwareMonitor';
 import { useRosTopicSubscription } from './hooks/useRosTopicSubscription';
 import { useHeartbeatMonitor, useRosLink } from './hooks/useConnectionMonitor';
 import useTrainerEvents from './hooks/useTrainerEvents';
@@ -300,6 +301,7 @@ function App() {
           <HomePage />
         )}
       </main>
+      <HardwareMonitor />
       <Toaster
         position="top-center"
         gutter={8}

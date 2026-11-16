@@ -14,6 +14,7 @@ import traceback
 from urllib.parse import parse_qs, urlparse
 
 from physios_trainer import __version__
+from physios_trainer.hardware.manager import HardwareError
 from physios_trainer.optimizer import OptError
 from physios_trainer.robots.archive import UploadError
 from physios_trainer.robots.readiness import ReadinessError
@@ -77,7 +78,7 @@ def make_handler(svc):
                 self._send(200, res)
             except (RobotError, UploadError, ReadinessError) as e:
                 self._send(getattr(e, 'status', 400), {'error': str(e)})
-            except (ApiError, OptError) as e:
+            except (ApiError, OptError, HardwareError) as e:
                 self._send(e.status, {'error': str(e)})
             except KeyError as e:
                 self._send(404, {'error': str(e).strip("'")})
@@ -158,6 +159,62 @@ def make_handler(svc):
                 if act == 'delete':
                     return r.delete(rid, b.get('confirm_name'))
             raise ApiError('Not found: %s robots/%s' % (m, '/'.join(p)), 404)
+
+        def _hardware(self, m, p, q, b):
+            hw = svc.hardware
+            rt = (b.get('robot_type') if m == 'POST' else q.get('robot_type')) or ''
+            if m == 'GET' and p == ['status']:
+                return hw.status(rt)
+            if m == 'POST' and p == ['estop']:
+                return hw.estop(b.get('source') or 'page')
+            if m == 'POST' and p == ['setup']:
+                return hw.setup(rt, mode=b.get('mode'), topics=b.get('topics'),
+                                env=b.get('env'))
+            if m == 'POST' and p == ['action-source']:
+                return hw.report_action_source(rt, b.get('supported'))
+            if m == 'POST' and p == ['detect']:
+                return hw.detect(rt)
+            if m == 'POST' and p == ['assign']:
+                return hw.assign(rt, b.get('key'), b.get('role'), b.get('label'))
+            if m == 'POST' and p == ['unassign']:
+                return hw.unassign(rt, b.get('role'))
+            if m == 'POST' and p == ['configure']:
+                return hw.configure(rt, b.get('role'), b.get('label'), b.get('port_override'))
+            if m == 'POST' and p == ['connect']:
+                return hw.connect(rt, b.get('role'))
+            if m == 'POST' and p == ['disconnect']:
+                return hw.disconnect(rt, b.get('role'))
+            if m == 'POST' and p == ['calibration']:
+                return hw.calibration_start(rt, b.get('role'), b.get('mode') or 'calibrate',
+                                            b.get('profile_id'))
+            if m == 'POST' and p == ['calibration', 'dismiss']:
+                return hw.calibration_dismiss()
+            if m == 'POST' and len(p) == 3 and p[0] == 'calibration' and p[2] == 'command':
+                return hw.calibration_command(p[1], b.get('command'), b.get('name'))
+            if m == 'GET' and p == ['profiles']:
+                return {'profiles': hw.reg.profiles(rt or None, q.get('role') or None)}
+            if m == 'POST' and len(p) == 3 and p[0] == 'profiles':
+                if p[2] == 'rename':
+                    return hw.reg.rename_profile(p[1], b.get('name'))
+                if p[2] == 'delete':
+                    hw.reg.delete_profile(p[1])
+                    return {'ok': True}
+                if p[2] == 'install':
+                    return hw.install_profile(p[1], b.get('lerobot_id'))
+            if m == 'GET' and p == ['jog', 'limits']:
+                return svc.jog_limits(q.get('dataset') or '')
+            if m == 'POST' and p == ['jog', 'prepare']:
+                return hw.jog_prepare(rt, b.get('request') or {})
+            if m == 'POST' and p == ['jog']:
+                return hw.jog_start(rt, b.get('request') or {}, b.get('token'),
+                                    b.get('confirmations'))
+            if m == 'POST' and len(p) == 3 and p[0] == 'jog' and p[2] == 'command':
+                return hw.jog_command(p[1], b)
+            if m == 'GET' and p == ['captures']:
+                return {'captures': hw.reg.captures(rt or None)}
+            if m == 'POST' and p == ['captures']:
+                return hw.save_capture(rt, b)
+            raise ApiError('Not found: %s hardware/%s' % (m, '/'.join(p)), 404)
 
         def do_GET(self):
             self._dispatch('GET')
@@ -274,6 +331,8 @@ def make_handler(svc):
                     return svc.rollouts.heartbeat(p[1])
             if p[:1] == ['robots']:
                 return self._robots(m, p[1:], b)
+            if p[:1] == ['hardware']:
+                return self._hardware(m, p[1:], q, b)
             # ---- optimisation sessions
             if p[:1] == ['optimization']:
                 return self._optimization(m, p[1:], q, b)

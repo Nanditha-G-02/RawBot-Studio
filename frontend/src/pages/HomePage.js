@@ -35,6 +35,7 @@ import { setRobotTypeList, setIsFirstLoadTrue, moveToPage, setRobotsView } from 
 import { listRobots } from '../features/robots/robotsApi';
 import { STAGE_NAMES } from '../features/robots/RobotDetail';
 import { Spinner } from '../components/ui';
+import HomeSetupRow from '../features/hardware/HomeSetupRow';
 
 // Same families as physical_ai_server/planning/profiles.py
 const FAMILIES = [
@@ -388,6 +389,10 @@ export default function HomePage() {
                   {saving ? <Spinner className="border-paper border-t-transparent" /> : null}
                   {confirmed ? `✓ ${robotType} confirmed — re-apply` : selected ? `Confirm ${selected}` : 'Choose a robot above'}
                 </button>
+
+                {robotType && (
+                  <HomeSetupRow robotType={robotType} disabled={busy} onOpen={() => openRobots({ mode: 'hardware' })} />
+                )}
 
                 <div className="lg-status">
                   {status.map((s) => (

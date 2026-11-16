@@ -11,7 +11,10 @@ browser without ROS:
   ``physical_ai_server.planning`` PlanningService (same code as on the robot);
   only the ROS transport and the recorder are simulated;
 * a web_video_server-like MJPEG endpoint on :8080 (synthetic frames);
-* a follower JointState publisher (synthetic sine motion).
+* a follower JointState publisher (synthetic sine motion);
+* a "bridge.py in teleoperation" stand-in: the leader JointTrajectory topic, reported by
+  rosapi as published by /so101_bridge (STANDIN_TELEOP=0 or /standin/set_teleop turns it off;
+  STANDIN_FOLLOWER=0 silences the follower, for Leader Only / Simulation walk-throughs).
 
 The simulated recorder appends synthetic episodes (ffmpeg test pattern videos)
 to a LeRobot v2.1 folder so the Data session has real files to read.
@@ -64,6 +67,9 @@ class Robot:
         self.command = None        # last JointTrajectory positions received on the leader topic
         self.command_t = 0.0
         self.commands_file = Path(os.environ.get('STANDIN_COMMANDS_FILE', '/tmp/standin_commands.jsonl'))
+        self.teleop = os.environ.get('STANDIN_TELEOP', '1') == '1'
+        self.follower_on = os.environ.get('STANDIN_FOLLOWER', '1') == '1'
+        self.action_source = 'leader'
 
     def params(self):
         if not self.robot_type:
@@ -194,7 +200,23 @@ class Robot:
                     'sensor_msgs/msg/JointState'}
         if name == '/rosapi/publishers':
             extra = os.environ.get('STANDIN_EXTRA_PUBLISHER')
-            return {'publishers': ['/rosbridge_websocket'] + ([extra] if extra else [])}
+            teleop = ['/so101_bridge'] if (self.teleop and 'leader' in args.get('topic', '')
+                                           and self.robot_type) else []
+            return {'publishers': ['/rosbridge_websocket'] + teleop + ([extra] if extra else [])}
+        if name == '/standin/set_teleop':
+            self.teleop = bool(args.get('enabled'))
+            if 'follower' in args:
+                self.follower_on = bool(args.get('follower'))
+            return {'success': True, 'message': 'teleop %s' % ('on' if self.teleop else 'off')}
+        if name == '/physical_ai_server/set_parameters':
+            res = []
+            for prm in args.get('parameters') or []:
+                if prm.get('name') == 'action_source':
+                    self.action_source = (prm.get('value') or {}).get('string_value') or 'leader'
+                    res.append({'successful': True, 'reason': ''})
+                else:
+                    res.append({'successful': False, 'reason': 'parameter not declared'})
+            return {'results': res}
         if name == '/get_robot_types':
             return {'robot_types': ['s101_dataset', 'omx_f']}
         if name == '/set_robot_type':
@@ -282,9 +304,21 @@ class Robot:
                            1.1 + 0.35 * math.sin(t * 0.5 + 1), -0.4 + 0.3 * math.sin(t * 0.9),
                            0.5 * math.sin(t * 0.3), 0.5 + 0.5 * math.sin(t * 1.3)]
                 self._pos = pos
-                await self.publish('/joint_states', {
-                    'header': {'stamp': {'sec': int(t), 'nanosec': 0}, 'frame_id': ''},
-                    'name': synthetic.JOINTS, 'position': pos, 'velocity': [], 'effort': []})
+                if self.follower_on:
+                    await self.publish('/joint_states', {
+                        'header': {'stamp': {'sec': int(t), 'nanosec': 0}, 'frame_id': ''},
+                        'name': synthetic.JOINTS, 'position': pos, 'velocity': [],
+                        'effort': []})
+                if self.teleop and time.time() - self.command_t > 1.0:
+                    lead = [0.6 * math.sin(t * 0.7), -0.7 + 0.35 * math.sin(t * 0.5),
+                            1.1 + 0.35 * math.sin(t * 0.5 + 1), -0.4 + 0.3 * math.sin(t * 0.9),
+                            0.5 * math.sin(t * 0.3), 0.5 + 0.5 * math.sin(t * 1.3)]
+                    await self.publish('/leader/joint_trajectory', {
+                        'header': {'stamp': {'sec': int(t), 'nanosec': 0}, 'frame_id': ''},
+                        'joint_names': synthetic.JOINTS,
+                        'points': [{'positions': lead, 'velocities': [], 'accelerations': [],
+                                    'effort': [], 'time_from_start': {'sec': 0,
+                                                                      'nanosec': 0}}]})
                 # cameras over rosbridge (CompressedImage) for subscribers, 320x240 like
                 # the stand-in recorder's videos, ~10 Hz
                 if int(t * 20) % 2 == 0:

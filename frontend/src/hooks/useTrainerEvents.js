@@ -44,7 +44,10 @@ export default function useTrainerEvents() {
         const r = await trainerFetch(`/events?after=${seq.current}`, { timeoutMs: 5000 });
         r.events.forEach((ev) => {
           const text = `${ev.title}: ${ev.body}`;
-          if (ev.level === 'error') toast.error(text, { duration: 8000 });
+          // hardware events are toasted by HardwareMonitor (desktop notification still below)
+          if (ev.title === 'Robot hardware') {
+            // no toast here
+          } else if (ev.level === 'error') toast.error(text, { duration: 8000 });
           else if (ev.level === 'warn') toast(text, { icon: '⚠️', duration: 6000 });
           else toast.success(text, { duration: 5000 });
           if (typeof Notification !== 'undefined' && Notification.permission === 'granted' && document.hidden) {

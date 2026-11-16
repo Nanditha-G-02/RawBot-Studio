@@ -23,6 +23,7 @@ import RobotDetail, { StageBadge } from '../features/robots/RobotDetail';
 import { ROBOT_TYPE_LABELS, listRobots } from '../features/robots/robotsApi';
 import { robotExtraTabs } from '../features/robots/RobotSetup';
 import { setRobotsView } from '../features/ui/uiSlice';
+import HardwareSetup from '../features/hardware/HardwareSetup';
 
 export default function RobotsPage() {
   const dispatch = useDispatch();
@@ -51,20 +52,46 @@ export default function RobotsPage() {
         <header className="flex items-end justify-between gap-4 flex-wrap">
           <div>
             <div className="label">Robots</div>
-            <h1 className="text-[24px] font-semibold tracking-tight">Custom robot library</h1>
+            <h1 className="text-[24px] font-semibold tracking-tight">{view.mode === 'hardware' ? 'Hardware setup' : 'Custom robot library'}</h1>
             <p className="text-[13px] text-ink-3 max-w-2xl">
-              Add a robot from its URDF, check it, look at it in 3D, then configure and verify it step by step. Recording and
-              training unlock only after the robot has been verified on hardware.
+              {view.mode === 'hardware'
+                ? 'Choose which arms you have, detect and connect them one at a time, calibrate each arm and see what the connected hardware allows.'
+                : 'Add a robot from its URDF, check it, look at it in 3D, then configure and verify it step by step. Recording and training unlock only after the robot has been verified on hardware.'}
             </p>
           </div>
-          {view.mode === 'library' && (
-            <button className="btn-primary" onClick={() => setView({ mode: 'add' })} data-action="add-robot">
-              + Add custom robot
-            </button>
-          )}
+          <div className="flex items-center gap-2">
+            <div className="flex gap-0.5 rounded-full bg-paper p-[3px]" role="tablist" aria-label="Robots view">
+              {[
+                ['hardware', 'Hardware setup'],
+                ['library', 'Custom robots'],
+              ].map(([k, label]) => {
+                const on = k === 'hardware' ? view.mode === 'hardware' : view.mode !== 'hardware';
+                return (
+                  <button
+                    key={k}
+                    type="button"
+                    role="tab"
+                    aria-selected={on}
+                    data-robots-tab={k}
+                    onClick={() => setView({ mode: k })}
+                    className={on ? 'rounded-full bg-ink px-3.5 py-1.5 text-[12.5px] font-medium text-white shadow-lift' : 'rounded-full px-3.5 py-1.5 text-[12.5px] text-ink-3 hover:text-ink'}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
+            {view.mode === 'library' && (
+              <button className="btn-primary" onClick={() => setView({ mode: 'add' })} data-action="add-robot">
+                + Add custom robot
+              </button>
+            )}
+          </div>
         </header>
 
-        {error && (
+        {view.mode === 'hardware' && <HardwareSetup />}
+
+        {error && view.mode !== 'hardware' && (
           <Callout tone="err" title="The robot library is not reachable">
             {error} The library is kept by the RawBot Studio training service; start it with ./start_physios.sh.
           </Callout>

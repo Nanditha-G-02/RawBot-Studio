@@ -33,6 +33,7 @@ import RecordViews, { VIEW_OPTIONS } from '../features/record/RecordViews';
 import PlanRecordPanel from '../features/record/PlanRecordPanel';
 import { usePlanRecording } from '../features/record/usePlanRecording';
 import TaskPhase from '../constants/taskPhases';
+import useHardwareGate, { useHardwareStatus } from '../features/hardware/useHardwareGate';
 
 export default function RecordPage({ isActive = true }) {
   const dispatch = useDispatch();
@@ -84,6 +85,9 @@ export default function RecordPage({ isActive = true }) {
     }
   };
   const reviewBlocks = planMode && !!reviewItem;
+  // Leader + Follower records teleoperated demos; Follower Only records hand-guided ones
+  const hwBlock = useHardwareGate('recording');
+  const handGuided = useHardwareStatus()?.mode === 'follower_only';
   const counts = rec.state?.counts;
   const [camOpen, setCamOpen] = useState(false);
   const camCheck = useSelector((s) => s.planning.cameraCheck);
@@ -282,6 +286,15 @@ export default function RecordPage({ isActive = true }) {
               className="shadow-sm"
             />
             <Segmented size="sm" value={view} onChange={setView} options={VIEW_OPTIONS} className="shadow-sm" />
+            {handGuided && (
+              <span
+                className="chip-sky shadow-sm"
+                data-hand-guided
+                title="Follower Only: move the follower by hand while recording; its joints are saved as both state and action. Start bridge.py with the follower torque off (passive) so the arm can be moved."
+              >
+                Hand-guided · follower torque off
+              </span>
+            )}
             <div
               className="flex items-center gap-2 border border-ink bg-white px-2.5 py-1 shadow-sm"
               title="When ON, every saved episode is shown for approval before you continue (plan mode) or in a side panel (free recording)."
@@ -364,7 +377,7 @@ export default function RecordPage({ isActive = true }) {
       <ControlPanel
         onStartOverride={planMode ? rec.start : null}
         episodeInfo={planEpisodeInfo}
-        startBlockedReason={reviewBlocks ? 'Review the saved episode before the next take.' : ''}
+        startBlockedReason={reviewBlocks ? 'Review the saved episode before the next take.' : hwBlock}
       />
       <Modal open={camOpen} title="Camera match check" onClose={() => setCamOpen(false)} width="max-w-5xl">
         {camOpen && <CameraMatchCheck datasetId={planMode ? rec.state?.dataset?.id : undefined} />}

@@ -2,6 +2,35 @@
 
 ## 2.0.0, renamed (2026-11-13)
 
+* **Flexible robot setup: no longer needs both arms.** After choosing a robot on Home you pick
+  what you have: Leader + Follower (the default; existing projects keep it), Leader Only,
+  Follower Only or Simulation Only.
+  * Robots → Hardware setup: Detect Hardware (every USB serial adapter, any name, scanned for
+    SO-101 motors when the port is free), one card per arm (connection state, port, USB
+    identity, motor IDs, calibration, per-joint communication), Connect / Disconnect /
+    Reconnect, Calibrate, Configure (label, port override, calibration profiles) and Refresh
+    Status, plus the list of what the connected hardware allows now.
+  * The role of an arm is bound to its USB adapter's identity and checked against a motor
+    scan, never taken from the port name. An arm is shown as connected only after its motors
+    answered or bridge.py publishes its joint messages.
+  * Features follow the hardware: both arms - teleoperation and synchronized recording; Leader
+    Only - calibration, joint monitoring, leader trajectory capture; Follower Only -
+    calibration, monitoring, supervised direct control (jog), policy runs and hand-guided
+    recording (the follower's joints are saved as the action); Simulation Only - planning,
+    3D model, training. Unavailable features are disabled with the reason, also on the Record,
+    Inference and host rollout Start buttons.
+  * Unplugging or losing an arm is shown within seconds and turns the dependent features off;
+    they come back on reconnection. A second arm that appears later switches a one-arm setup
+    to Leader + Follower without a new project.
+  * Each arm is calibrated on its own (torque off, no motion; cancel restores the original
+    values) and saved as a profile.
+  * `./scripts/estop.sh` stops jog, host rollout and calibration without a browser.
+  * bridge.py keeps the serial ports; RawBot Studio opens a port only when it is free (scan,
+    read-only session, calibration). Robot runtime: new `action_source` parameter in
+    physical_ai_server (default `leader`, unchanged behaviour); rebuild the robot image to use
+    hand-guided recording. Tests: `trainer_tests/test_hardware.py` (simulated USB and motor
+    buses), `tests/e2e/hw_ui_check.py` (browser, nine scenarios); `devstack.py --hardware`.
+
 * **README and project visuals.** The README has a light/dark banner, a screen recording of
   the workflow (`documentation/media/`), a screenshot gallery that follows the reader's GitHub
   theme, key features, technology stack, workflow and architecture diagrams (Mermaid), and

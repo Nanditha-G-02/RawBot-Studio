@@ -9,7 +9,12 @@ on a machine without ROS or a GPU:
   that writes LeRobot episodes (ffmpeg test videos), MJPEG on :8080, synthetic JointState;
 * the REAL physios_trainer on :8766 with a stub lerobot environment (backend/trainer_tests/stub_train.py
   produces loss curves and checkpoints) and fixture runs;
-* the REAL PHYSIOS gateway on :8700.
+* the REAL PHYSIOS gateway on :8700;
+* simulated USB hardware (backend/trainer_tests/hw_fixtures.py): two SO-101 adapters in a fake
+  sysfs with simulated Feetech motor buses. ``--hardware bridge`` (default) registers them as
+  leader and follower and then holds both ports with a stand-in "bridge.py", like a real
+  setup with teleoperation running; ``--hardware free`` leaves them plugged in, unassigned and
+  free (Detect / assign / calibrate); ``--hardware none`` plugs nothing.
 
     python3 devstack.py <workdir> [--seed]      # Ctrl+C stops everything
 
@@ -87,6 +92,31 @@ def seed():
     return pid
 
 
+def trainer(path, body=None):
+    req = urllib.request.Request('http://127.0.0.1:8766/' + path, data=json.dumps(
+        body).encode() if body is not None else None, headers={'Content-Type':
+                                                               'application/json'})
+    return json.load(urllib.request.urlopen(req, timeout=60))
+
+
+def hardware_bridge(world):
+    """Register the two simulated arms (validated motor scan), then let a stand-in bridge.py
+    hold both ports - from here on the arms are seen through ROS, as in a real setup."""
+    rt = 's101_dataset'
+    trainer('hardware/setup', {'robot_type': rt, 'mode': 'leader_follower', 'topics': {
+        'follower': '/joint_states', 'leader': '/leader/joint_trajectory'}})
+    st = trainer('hardware/detect', {'robot_type': rt})
+    by_dev = {u['port']['device']: u['key'] for u in st['unassigned']}
+    trainer('hardware/assign', {'robot_type': rt, 'key': by_dev[world.device('ttyACM0')],
+                                'role': 'leader'})
+    trainer('hardware/assign', {'robot_type': rt, 'key': by_dev[world.device('ttyACM1')],
+                                'role': 'follower'})
+    world.hold('ttyACM0')
+    world.hold('ttyACM1')
+    print('[devstack] simulated arms registered; bridge.py stand-in holds both ports',
+          flush=True)
+
+
 def real_fixture(work):
     """A finished run whose checkpoint points at the recorded dataset, in an environment with
     a real Python (numpy, pyarrow; no LeRobot): rollout preparation (compatibility, safety
@@ -108,6 +138,7 @@ def main():
     ap.add_argument('work')
     ap.add_argument('--seed', action='store_true')
     ap.add_argument('--keep', action='store_true', help='do not wipe the work dir')
+    ap.add_argument('--hardware', choices=('bridge', 'free', 'none'), default='bridge')
     a = ap.parse_args()
     import fixtures as fx  # backend/trainer_tests
     work = Path(a.work).resolve()
@@ -123,6 +154,11 @@ def main():
         fx.standard_fixture(work / 'training')
     py = sys.executable
     procs = []
+    from hw_fixtures import HwWorld
+    world = HwWorld(work / 'usb')
+    if a.hardware != 'none':
+        world.plug('ttyACM0', serial='5A46085090', sweep_on_calibrate=True)   # leader
+        world.plug('ttyACM1', serial='5A46081747', sweep_on_calibrate=True)   # follower
 
     def spawn(argv, cwd, log, extra_env=None):
         import os
@@ -137,13 +173,14 @@ def main():
     spawn([py, '-m', 'physios_trainer', '--data-root', str(work / 'data'), '--data-dir',
            str(work / 'training'), '--dataset-root', str(work / 'ds'), '--env',
            'stub=%s' % env, '--env', 'realpy=%s' % (work / 'realpy')],
-          ROOT / 'backend', 'trainer.log')
+          ROOT / 'backend', 'trainer.log', world.env())
     spawn([py, '-m', 'physios_gateway'], ROOT / 'backend', 'gateway.log',
           {'PHYSIOS_VAR_DIR': str(work / 'var'), 'PHYSIOS_DATASET_ROOTS': str(work / 'ds'),
            'PHYSIOS_DATA_DIR': str(work / 'data'),
            'PHYSIOS_CONFIG': str(work / 'none.env')})
 
     def stop(*_):
+        world.close()
         for p in procs:
             p.terminate()
         for p in procs:
@@ -157,6 +194,8 @@ def main():
     signal.signal(signal.SIGINT, stop)
     wait(lambda: api('health')['services']['ros_node']['status'] == 'ok', 40, 'stack')
     print('[devstack] up: http://127.0.0.1:8700', flush=True)
+    if a.hardware == 'bridge':
+        hardware_bridge(world)
     if a.seed:
         seed()
         real_fixture(work)

@@ -95,6 +95,13 @@ class PhysicalAIServer(Node):
         self.is_training = False
         self.training_status_timer = None
 
+        # RawBot Studio flexible robot setup: where the recorded action comes from.
+        # 'leader' (default, the original workflow) or 'follower' (Follower Only:
+        # hand-guided recording - the follower's own joints are the action).
+        # Read when a recording starts; set by the RawBot Studio interface.
+        self.declare_parameter('action_source', 'leader')
+        self.action_source = 'leader'
+
         self._init_core_components()
 
         self._init_ros_publisher()
@@ -269,6 +276,11 @@ class PhysicalAIServer(Node):
             task_info=task_info
         )
         self.communicator.clear_latest_data()
+        source = str(self.get_parameter('action_source').value or 'leader')
+        self.action_source = source if source in ('leader', 'follower') else 'leader'
+        if self.action_source == 'follower':
+            self.get_logger().info(
+                'Hand-guided recording: the follower joint states are the action.')
 
         self.timer_manager = TimerManager(node=self)
         self.timer_manager.set_timer(
@@ -453,7 +465,7 @@ class PhysicalAIServer(Node):
                 self.get_logger().info('Waiting for follower data...')
                 return
 
-        elif leader_msgs is None:
+        elif leader_msgs is None and self.action_source != 'follower':
             if time.perf_counter() - self.start_recording_time > self.DEFAULT_TOPIC_TIMEOUT:
                 error_msg = 'Leader data not received within timeout period'
                 self.get_logger().error(error_msg)
@@ -466,8 +478,10 @@ class PhysicalAIServer(Node):
                 camera_msgs,
                 follower_msgs,
                 self.total_joint_order,
-                leader_msgs,
+                leader_msgs if self.action_source != 'follower' else None,
                 self.joint_order)
+            if self.action_source == 'follower':
+                leader_data = self._follower_as_action(follower_msgs)
 
         except Exception as e:
             error_msg = f'Failed to convert messages: {str(e)}, please check the robot type again!'
@@ -520,6 +534,22 @@ class PhysicalAIServer(Node):
             self.on_recording = False
             self.timer_manager.stop(timer_name=self.operation_mode)
             return
+
+    def _follower_as_action(self, follower_msgs):
+        """Hand-guided recording: the action is the follower's measured joints, in the order
+        of the action (leader) joints of the robot configuration."""
+        follower = next((m for m in follower_msgs.values() if m is not None), None)
+        if follower is None:
+            raise RuntimeError('no follower joint state')
+        action = []
+        for key, names in self.joint_order.items():
+            values = self.data_manager.joint_msgs2tensor_array(follower, names)
+            if len(values) != len(names):
+                missing = [n for n in names if n not in list(follower.name)]
+                raise RuntimeError('hand-guided recording: the follower joint states do not '
+                                   'contain %s' % ', '.join(missing))
+            action.extend(values)
+        return action
 
     def _inference_timer_callback(self):
         error_msg = ''

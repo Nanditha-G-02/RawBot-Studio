@@ -29,6 +29,7 @@ import { Segmented } from '../components/ui';
 import SimulationView from '../features/record/SimulationView';
 import { usePlanningService } from '../hooks/usePlanningService';
 import HostRollout from '../features/rollout/HostRollout';
+import useHardwareGate from '../features/hardware/useHardwareGate';
 
 function ContainerInference({ isActive = true }) {
   const dispatch = useDispatch();
@@ -39,6 +40,7 @@ function ContainerInference({ isActive = true }) {
 
   const taskStatus = useSelector((state) => state.tasks.taskStatus);
   const taskInfo = useSelector((state) => state.tasks.taskInfo);
+  const hwInference = useHardwareGate('inference');
 
   const [isRightPanelCollapsed, setIsRightPanelCollapsed] = useState(false);
 
@@ -229,7 +231,7 @@ function ContainerInference({ isActive = true }) {
           </div>
         </div>
       </div>
-      <ControlPanel />
+      <ControlPanel startBlockedReason={hwInference} />
     </div>
   );
 }

@@ -143,6 +143,74 @@ The robot server lists one robot type per `<robot>_config.yaml`. The built-in on
 
 It is installed at every container start and survives image rebuilds.
 
+### 4.4 Hardware setup: which arms you have
+
+RawBot Studio no longer needs both arms. After you confirm a robot on Home, the **Hardware
+setup** row under the robot list sets what this robot has:
+
+| Configuration | What it enables |
+|---|---|
+| **Leader + Follower** (default; existing projects keep it) | teleoperation, synchronized recording, demonstration collection (Plan → Record) |
+| **Leader Only** | leader calibration, leader joint monitoring, leader trajectory capture |
+| **Follower Only** | follower calibration, joint monitoring, direct control (supervised jog), policy runs, hand-guided recording |
+| **Simulation Only** | planning, the 3D model and simulation view, training; nothing uses an arm |
+
+**Robots → Hardware setup** (or *Detect & connect →* on Home) shows one card per arm with its
+connection state, serial port, USB identity, motor IDs, calibration and per-joint
+communication, plus **Detect Hardware**, **Connect / Disconnect / Reconnect**, **Calibrate**,
+**Configure** and **Refresh Status**, and a list of what the connected hardware allows now.
+Every feature that is not available says why, and the Record, Inference and host rollout
+Start buttons show the same reason instead of failing.
+
+**Who owns the serial ports.** Your `bridge.py` keeps the ports while it runs, and
+teleoperation, recording, inference and jog all go through it over ROS, as before. RawBot
+Studio opens a port itself only when no program holds it: for a motor scan (Detect), a
+read-only Connect session, or a calibration. So to calibrate an arm, stop `bridge.py` first;
+the card says so.
+
+**First time: Detect Hardware and assign roles.** Detect lists every USB serial adapter
+(whatever its name, `ttyACM*`, `ttyUSB*`, ...) and, when its port is free, scans it for the six
+SO-101 motors. You then assign each adapter as *leader* or *follower*. Leader and follower use
+the same motors, so the role is never guessed from the port: it is bound to the USB adapter
+(vendor, product, serial number) and saved, so a re-plugged cable that comes back as another
+`/dev/ttyACM*` is still recognised. *Configure* sets a label or a fixed port if your adapter has
+no serial number.
+
+**When is an arm "Connected".** Only after communication is verified: every motor answered in
+RawBot Studio's read-only session, or `bridge.py` publishes live joint messages for that arm.
+A port that merely exists, or a program that merely holds it, shows *Detected* or *Port in use*,
+not *Connected*.
+
+**Changes while running.** The status refreshes every 2 seconds. An arm that is unplugged or
+stops sending messages turns *Connection lost*, a message appears, and features that need it
+are disabled; they come back when it reconnects. If you started with Leader Only or Follower
+Only and the other arm appears (plugged in and checked, or `bridge.py` starts publishing it),
+the configuration switches to Leader + Follower by itself, without a new project.
+
+**Calibration.** Each arm is calibrated on its own (torque off, you move the arm by hand, no
+motion is commanded; *Cancel* writes the original values back). Each calibration is saved as
+a profile; *Configure* lists the profiles; it can write one back to the motors (*Apply*), and copy the
+newest into LeRobot's calibration folder for `lerobot-*` commands or a LeRobot-based `bridge.py`. Motor scans and calibration use the Python
+environment with LeRobot (conda env `lerobot` by default).
+
+**Follower Only.**
+* *Direct control*: pick a recorded dataset for the joint limits, review, tick the three
+  checks, then hold a joint's button to move it. One joint at a time, only while held, inside
+  the limits and speed you reviewed; release, a closed page, stale joint states or another
+  program commanding the arm hold it in place. It is refused while teleoperation is running.
+* *Hand-guided recording*: start `bridge.py` with the follower torque off (passive), then
+  record as usual; the follower's joints are saved as both state and action. The Record page
+  shows "Hand-guided" while this is active.
+
+**Emergency stop without a browser.** `./scripts/estop.sh` stops a jog session and a host
+rollout and cancels a calibration, even when no page is open; if the training service does
+not answer it kills the workers directly. *Stop all* on the Hardware setup page does the same.
+Motion that `bridge.py` makes itself (teleoperation) is not RawBot Studio's: switch the arm's
+power off.
+
+What RawBot Studio remembers is in `data/workspace/physios/hardware/`: `registry.json` (arms,
+roles, configuration per robot), `profiles/` (calibrations) and `captures/` (leader captures).
+
 ## 5. Operator sign-in (optional; required for network access)
 
 ```bash
@@ -225,6 +293,12 @@ What the import copies:
 | Sign-in screen, token unknown | `PHYSIOS_AUTH_TOKEN` is set | read it from `configuration/physios.env`; remove it to turn sign-in off (loopback only) |
 | Host rollout load fails "No module named lerobot" | the run's environment lacks LeRobot | train and run in the LeRobot environment |
 | Recording start rejected | the server's message is shown as is; usually robot type not set, or a task running | follow the message |
+| Start shows "Needs Leader + Follower" or "Simulation Only is selected" | the hardware configuration on Home does not include the arm this needs | choose the right configuration on Home |
+| Arm card "Port in use", no joint messages | `bridge.py` (or another program) holds the port but does not publish that arm's topic | check `bridge.py`; the card names the program and its PID |
+| Calibrate is greyed out: "Stop bridge.py (PID …) first" | calibration needs the serial port | stop `bridge.py`, calibrate, start it again |
+| Detect lists no adapters | the arm is not plugged in, or not a USB serial device | `ls /dev/serial/by-id/`; plug in and press Detect Hardware again |
+| "No Python environment with LeRobot was found" | motor scans and calibration use the LeRobot install that drives the arm | install LeRobot in the environment that drives the arm (Training → Environment shows what was found) |
+| Hand-guided recording: the follower cannot be moved | the follower torque is on | start `bridge.py` with the follower passive (torque off) |
 
 `curl -s 127.0.0.1:8700/api/v1/health | python3 -m json.tool` shows the same checks as the UI.
 
@@ -235,7 +309,7 @@ Everything runs from the repository itself, without ROS, a GPU or a robot:
 ```bash
 cd backend
 python3 -m pytest -q tests            # gateway: 22
-python3 -m pytest -q trainer_tests    # training service + standalone layout: 102 (1 skipped)
+python3 -m pytest -q trainer_tests    # training service, hardware, standalone layout: 125 (1 skipped)
 cd ../robot/src/physical_ai_server
 python3 -m pytest -q test/planning    # planning engine: 45
 cd ../../../frontend && CI=true npm run build   # production build, lint warnings fail it
@@ -244,6 +318,7 @@ cd ../../../frontend && CI=true npm run build   # production build, lint warning
 python3 tests/e2e/devstack.py /tmp/physios-dev [--seed]                 # terminal 1
 python3 tests/e2e/run_e2e.py http://127.0.0.1:8700 /tmp/physios-shots   # 26 steps
 python3 tests/e2e/opt_ui_check.py http://127.0.0.1:8700                 # Optimize tab (needs --seed)
+python3 tests/e2e/hw_ui_check.py http://127.0.0.1:8700 /tmp/physios-dev # hardware setup scenarios
 cd backend && PHYSIOS_PORT=8710 PHYSIOS_AUTH_TOKEN=lab-operator-2026 python3 -m physios_gateway &
 python3 tests/e2e/auth_e2e.py http://127.0.0.1:8710 lab-operator-2026   # sign-in, 6 steps
 ```

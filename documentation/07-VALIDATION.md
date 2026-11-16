@@ -45,6 +45,32 @@ robot PC.
 | Optimize tab | `tests/e2e/opt_ui_check.py` against `devstack.py --seed` | **9/9** |
 | Sign-in | `tests/e2e/auth_e2e.py` | **6/6** |
 
+### Flexible robot setup (16 Nov 2026)
+
+Against simulated hardware: a fake Linux sysfs with two USB serial adapters, simulated Feetech
+STS3215 motor buses, a stand-in `bridge.py` holding the ports and a stand-in teleoperation
+topic (`devstack.py --hardware bridge`).
+
+| Scenario | Unit tests (`trainer_tests/test_hardware.py`) | Browser (`tests/e2e/hw_ui_check.py`) |
+|---|---|---|
+| 1. Leader + Follower | both arms through bridge.py, teleop and recording on | cards connected, capabilities on |
+| 2. Leader Only | follower unused, leader features only | leader capture saved, Record Start shows "Needs Leader + Follower" |
+| 3. Follower Only | jog, hand-guided recording, policy runs | jog session started and ended; Record shows "Hand-guided" and Start is allowed |
+| 4. Simulation Only | nothing uses an arm; never changed automatically | Record and Inference Start show "Simulation Only is selected" |
+| 5. Leader lost during operation | unplug and stale messages turn it *lost* | Record Start disabled with the reason, a message appears |
+| 6. Follower lost during operation | unplugged during a read-only session | Inference Start disabled with the reason |
+| 7. Reconnection | same adapter on a new port is recognised; ROS arm comes back | plugged back in, recording on again |
+| 8. Independent calibration | profile saved per arm; cancel restores the motors; refused while bridge.py holds the port | follower connected alone (read-only), calibrated, leader untouched |
+| 9. Dynamic availability | a second arm appearing later switches to Leader + Follower; an arm present when the operator chooses does not | leader plugged in later switches Follower Only to Leader + Follower |
+
+Results: `test_hardware.py` **22 passed**; `hw_ui_check.py` **9/9**. The 26-step workflow
+and the Optimize check still pass with the simulated arms present.
+
+**Not validated:** the real SO-101 arms, the real `bridge.py` (its topic names and whether it
+publishes the leader topic only during teleoperation), the real LeRobot Feetech bus (the
+worker uses LeRobot's `FeetechMotorsBus` API as in LeRobot 0.6/0.7), and hand-guided recording
+in the rebuilt robot image.
+
 ## 3. Deployment validation
 
 | Path | What was run | Result |

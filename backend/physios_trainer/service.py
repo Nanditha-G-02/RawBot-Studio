@@ -20,6 +20,7 @@ from physios_trainer.introspect import Introspector
 from physios_trainer.jobqueue import JobQueue, Notifier
 from physios_trainer import rollout as ro
 from physios_trainer.optimizer import Sessions
+from physios_trainer.hardware.manager import Hardware
 from physios_trainer.robots.store import RobotStore
 from physios_trainer.runner import foreign_trainings, Runs
 from physios_trainer.util import atomic_write_json, dir_size, now_iso, read_json, version_tuple
@@ -77,6 +78,10 @@ class Service:
         self.rollouts = ro.Rollouts(self.data_dir, self.envs, log=log)
         self.robots = RobotStore(self.data_dir)
         self.opt = Sessions(self, self.data_dir, log=log, autostart=autostart_optimizer)
+        # flexible robot setup: arms, connections, calibration, jog (hardware/manager.py)
+        self.hardware = Hardware(self.repo / 'workspace' / 'physios' / 'hardware', self.envs,
+                                 rollouts=self.rollouts, notifier=self.notifier, log=log,
+                                 monitor=autostart_optimizer)
 
     def _run_finished(self, run):
         prog = run.get('progress') or {}
@@ -892,6 +897,31 @@ class Service:
                 'limits_source': _limits_source(limits, proposal,
                                                 self.rollouts.saved_limits(ds_id)),
                 'busy': self.rollouts.active()}
+
+    def jog_limits(self, dataset_id):
+        """Joint envelope of a recorded dataset as default jog limits (same computation as the
+        host rollout safety limits). Speed defaults to 10% of each joint's range per second."""
+        ds = next((d for d in self.datasets() if d.get('id') == dataset_id), None)
+        if not ds:
+            raise ApiError('Dataset %s not found.' % dataset_id, 404)
+        env = None
+        for name in ['lerobot'] + [e['name'] for e in self.envs.list()]:
+            try:
+                p = self.envs.probe(name)
+            except KeyError:
+                continue
+            if p.get('ok'):
+                env = self.envs.get(name)
+                break
+        if not env:
+            raise ApiError('No Python environment found to read the dataset.')
+        try:
+            prop = self.rollouts.limits_proposal(env, ds['path'])
+        except (RuntimeError, subprocess.SubprocessError) as e:
+            raise ApiError(str(e))
+        joints = [{'name': j['name'], 'min': j['min'], 'max': j['max'],
+                   'speed': round(0.1 * (j['max'] - j['min']), 5)} for j in prop['joints']]
+        return {'dataset': dataset_id, 'joints': joints, 'episodes': prop.get('episodes')}
 
     def rollout_start(self, req, token):
         prep = self.rollout_prepare(req)
