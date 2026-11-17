@@ -100,12 +100,10 @@ def test_leader_only_records_through_the_simulated_robot(world, hw):
     live(hw, follower=False)
     st = hw.status(RT)
     p = st['planning']
-    assert p['config'] == 'leader_only' and not st['sim']['running']
-    assert not p['record']['available'] and 'Simulated twin' in p['record']['reason']
-    st = hw.setup(RT, sim_twin=True)
-    p = st['planning']
-    assert p['config'] == 'physical_sim'
+    # only a leader: the simulated follower is the execution target without any switch
+    assert p['config'] == 'leader_sim' and p['auto'] and st['sim']['running']
     assert p['selection'] == {'action': 'leader', 'target': 'sim', 'observation': 'sim'}
+    assert {c['id']: c['state'] for c in p['checks']}['mapping'] == 'ok'
     assert st['sim']['state_topic'] == '/joint_states'      # free: no physical follower
     assert p['record']['available'] and p['record']['action_param'] == 'leader'
     # the leader drives the simulation
@@ -467,3 +465,85 @@ def test_jog_stop_is_not_overwritten_by_a_heartbeat(tmp_path, hw):
         t.join()
     assert _json.loads((d / 'control.json').read_text())['command'] == 'stop'
     hw.jog = None
+
+
+# ------------------------------------------------------- robot-aware (any robot) ---
+def write_custom(root, rid, joints, config=None):
+    import json as _json
+    d = root / rid
+    d.mkdir(parents=True)
+    prof = {'id': rid, 'name': rid, 'validation': {'summary': {'joint_list': joints}}}
+    if config:
+        prof['config'] = config
+    (d / 'profile.json').write_text(_json.dumps(prof))
+
+
+def test_capabilities_come_from_the_robot_not_its_model():
+    from physios_trainer.hardware import robotcaps
+    c = robotcaps.capabilities('any', ['j%d' % i for i in range(7)] + ['finger_joint'])
+    assert c['dof'] == 8 and c['gripper'] == 'finger_joint'
+    assert c['controls']['keyboard']['available']                 # up to 9 joints
+    assert not c['controls']['gamepad']['available'] and c['controls']['gamepad']['short'] == '> 6 joints'
+    c = robotcaps.capabilities('any', [])
+    assert not c['sim']['available'] and not c['controls']['gui']['available']
+    m = robotcaps.mapping(['a', 'b'], ['a', 'b', 'grip'], 'grip')
+    assert m['missing'] == ['grip'] and m['gripper'] is False
+
+
+def test_custom_robot_urdf_limits_shape_the_simulated_follower(world, tmp_path):
+    rdir = tmp_path / 'robots'
+    joints = [{'name': 'base', 'type': 'revolute', 'lower': -1.0, 'upper': 1.0},
+              {'name': 'lift', 'type': 'revolute', 'lower': -0.5, 'upper': 2.0},
+              {'name': 'slide', 'type': 'prismatic', 'lower': 0.0, 'upper': 0.04},
+              {'name': 'fixed_tip', 'type': 'fixed'}]
+    write_custom(rdir, 'My-Arm 2', joints, {'joints': [
+        {'urdf_joint': 'base', 'ros_joint': 'base_joint'},
+        {'urdf_joint': 'lift', 'ros_joint': 'lift_joint', 'soft_lower': -0.4, 'soft_upper': 1.5},
+        {'urdf_joint': 'slide', 'ros_joint': 'gripper_slide'}]})
+    h = Hardware(tmp_path / 'hw', Environments(), monitor=False, robots_dir=rdir)
+    h.ros = FakeRos()
+    try:
+        st = h.setup('my_arm_2', mode='simulation', topics={'follower': '/joint_states'})
+        r = st['planning']['robot']
+        assert r['names'] == ['base_joint', 'lift_joint', 'gripper_slide']
+        assert r['gripper'] == 'gripper_slide' and r['dof'] == 3
+        assert r['limits']['lift_joint'] == [-0.4, 1.5]            # soft limits win
+        assert st['sim']['names'] == r['names']
+        assert st['sim']['limits'][2] == [0.0, 0.04]
+        st = h.sim_command('my_arm_2', {'command': 'targets', 'targets': {'lift_joint': 9}})
+        assert st['sim']['target'][1] == pytest.approx(1.5)
+        assert {c['id'] for c in st['planning']['checks']} >= {'robot'}
+        assert opts(st, 'action_sources')['gamepad']['available']
+    finally:
+        h.stop()
+
+
+def test_leader_missing_a_joint_blocks_recording(world, hw):
+    register(world, hw, ('leader',))
+    hw.setup(RT, mode='leader_sim')
+    hw.ros.publish('/leader/joint_trajectory', J[:5], [0.1] * 5)   # no gripper on the leader
+    st = hw.status(RT)
+    ch = {c['id']: c for c in st['planning']['checks']}
+    assert ch['mapping']['state'] == 'err' and 'gripper' in ch['mapping']['detail']
+    assert ch['gripper']['state'] == 'err'
+    assert not st['planning']['record']['available']
+    assert 'no joint gripper' in st['planning']['record']['reason']
+
+
+def test_only_a_leader_in_leader_follower_uses_the_simulated_follower(world, hw):
+    """No follower was ever set up: the simulated follower is the target by itself. A follower
+    that is set up but unplugged keeps Leader + Follower (and says why)."""
+    register(world, hw, ('leader',))
+    live(hw, follower=False)
+    st = hw.status(RT)
+    assert st['mode'] == 'leader_follower'
+    assert st['planning']['config'] == 'leader_sim' and st['planning']['auto']
+    assert st['planning']['selection']['target'] == 'sim' and st['sim']['running']
+    world.plug('ttyACM1', serial='FOLL-B')
+    s2 = hw.detect(RT)
+    hw.assign(RT, [u for u in s2['unassigned'] if u['port']['device'] == world.device(
+        'ttyACM1')][0]['key'], 'follower')
+    world.unplug('ttyACM1')
+    hw.ports_at = 0
+    st = hw.status(RT)
+    assert st['planning']['config'] != 'leader_sim' and not st['planning']['auto']

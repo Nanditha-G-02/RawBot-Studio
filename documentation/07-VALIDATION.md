@@ -119,6 +119,20 @@ simulated follower at +π/2 and the gripper following, Record, a plan take saved
 **Not validated:** the new `leader_state` path in the real physical_ai_server (it cannot run in
 the sandbox; compiled only), your real leader arm's tick convention against your dataset.
 
+### Robot-aware Planning (17 Nov 2026)
+
+`test_planning_setup.py` 24: capabilities from joint names alone (8 joints with a finger: keyboard
+yes, gamepad no); a custom 3-joint robot with a prismatic gripper from its URDF (ROS names, soft
+limits shaping the simulated robot, gamepad allowed); a leader missing the gripper blocks
+recording; only a leader in Leader + Follower uses the simulated follower, a set-up but unplugged
+follower does not. `plan_hw_check.py` 7/7 (P3 now: Leader Only → automatic simulated follower,
+checks green, follower option hidden), `hw_ui_check.py` 9/9 (Leader Only expectation updated),
+`setup_flow_check.py` 10/10, 26-step walk-through with arms and with `--hardware none`, Optimize.
+trainer_tests 149 (1 skipped), planning 46, gateway 22.
+
+**Not validated:** a real custom robot end to end (its robot type must be active on the robot
+server), a robot with more than 6 joints in the browser.
+
 ## 3. Deployment validation
 
 | Path | What was run | Result |

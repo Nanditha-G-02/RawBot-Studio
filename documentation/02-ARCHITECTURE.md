@@ -229,6 +229,10 @@ The training service keeps a small hardware manager (`backend/physios_trainer/ha
   `follower`); the interface sets it to `follower` for Follower Only, and the recorder then saves
   the follower's joints as the action (hand-guided recording).
 
+* `robotcaps.py` describes the robot without naming its model: joints (type, limits) and gripper
+  from a custom robot's URDF or the robot configuration, whether it can be simulated or read over
+  serial, and which control methods fit. `planning.py` gates its options with it and checks the
+  joint mapping before recording.
 * `planning.py` turns the same status into the Planning choices (action source, target robot,
   observation), each with a reason when it does not fit, and decides for the current choice
   whether a demonstration can be recorded and how physical_ai_server takes the action

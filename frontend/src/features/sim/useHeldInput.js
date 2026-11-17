@@ -26,6 +26,9 @@ export const KEY_PAIRS = [
   ['r', 'f'],
   ['t', 'g'],
   ['y', 'h'],
+  ['u', 'j'],
+  ['i', 'k'],
+  ['o', 'l'],
 ];
 // gamepad (standard mapping): sticks for the first four joints, bumpers and triggers for
 // the last two

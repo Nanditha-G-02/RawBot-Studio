@@ -96,7 +96,10 @@ def test_leader_only(world, hw):
     assert st['arms']['follower']['state'] == 'unused'
     c = caps(st)
     assert c['leader_monitor'] and c['leader_capture'] and c['leader_calibration']
-    assert not c['record'] and 'Leader + Follower' in st['capabilities']['record']['reason']
+    # only a physical leader: its simulated follower is the target by itself, and records
+    assert st['planning']['config'] == 'leader_sim' and st['planning']['auto']
+    assert c['record'], st['capabilities']['record']['reason']
+    assert not c['teleoperation']
     assert not c['follower_control']
     with pytest.raises(HardwareError):
         hw.connect(RT, 'follower')   # not part of Leader Only

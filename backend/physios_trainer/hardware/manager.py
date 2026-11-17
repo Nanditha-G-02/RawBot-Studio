@@ -33,6 +33,7 @@ import uuid
 from physios_trainer.hardware import capabilities as capmod
 from physios_trainer.hardware import planning as planmod
 from physios_trainer.hardware import ports as portmod
+from physios_trainer.hardware import robotcaps
 from physios_trainer.hardware.registry import MODES, ROLES, Registry, motor_spec
 from physios_trainer.hardware.simbot import SimRobot
 from physios_trainer.util import atomic_write_json, now_iso, read_json
@@ -157,7 +158,7 @@ class RosWatch:
 class Hardware:
 
     def __init__(self, root, envs, rollouts=None, notifier=None, log=print,
-                 rosbridge_url=None, monitor=True):
+                 rosbridge_url=None, monitor=True, robots_dir=None):
         self.root = Path(root)
         self.reg = Registry(self.root)
         self.sess_dir = self.root / 'sessions'
@@ -183,6 +184,7 @@ class Hardware:
         self.active_robot = None
         self.action_source_supported = {}
         self._jog_lock = threading.Lock()
+        self.robots_dir = robots_dir     # custom robots (URDF joints and limits)
         # the simulated robot (simbot.py); publishes over its own rosbridge connection
         self.sim = SimRobot(self.ros.url, sampler=lambda t: self.ros.sample(t),
                             bridge_factory=_bridge if monitor else None, log=log,
@@ -672,7 +674,7 @@ class Hardware:
                      setup['topics'].get('leader')) if setup['topics'].get('leader') else None}
         caps = capmod.compute(setup['mode'], arms, extra)
         plan = self._planning(robot_type, setup, arms, caps, extra)
-        if setup['mode'] == 'leader_sim':
+        if plan['config'] == 'leader_sim':
             # demonstrations are recorded through the simulated follower (Planning decides)
             for k in ('record', 'collect'):
                 caps[k] = dict(caps[k], available=plan['record']['available'],
@@ -696,8 +698,17 @@ class Hardware:
             'checked_at': now_iso(),
         }
 
+    def auto_leader_sim(self, setup, arms):
+        """Only a physical leader is there (Leader Only, or Leader + Follower with no follower
+        ever set up): its simulated follower becomes the execution target by itself."""
+        L, F = arms['leader'], arms['follower']
+        return (setup['mode'] in ('leader_only', 'leader_follower') and
+                L.get('state') == 'connected' and
+                F.get('state') in ('unused', 'not_configured'))
+
     def _planning(self, robot_type, setup, arms, caps, extra):
-        mode = setup['mode']
+        auto = self.auto_leader_sim(setup, arms)
+        mode = 'leader_sim' if auto else setup['mode']
         ft = setup['topics'].get('follower')
         run = mode in ('simulation', 'leader_sim') or bool(setup.get('sim_twin'))
         own_reason = ''
@@ -720,14 +731,28 @@ class Hardware:
                     if n:
                         names = n
                         break
+        if not names:
+            # the arms' own joints (serial motor table or their ROS messages)
+            for role in ('follower', 'leader'):
+                js = list((arms[role].get('joints') or {}).keys())
+                if js and arms[role].get('state') == 'connected':
+                    names = js
+                    break
+        # what this robot is (joints, gripper, limits, controls): from a registered custom
+        # robot's URDF, else the robot configuration's joint order
+        rc = robotcaps.capabilities(
+            robot_type, names, robotcaps.custom_profile(self.robots_dir, robot_type),
+            serial=bool(motor_spec(robot_type)), topics=setup['topics'])
         # the leader read by RawBot Studio itself (serial session): converted to radians and
         # published for the recorder; with bridge.py the leader topic is used as before
         L = arms['leader']
         serial_leader = L.get('state') == 'connected' and L.get('source') == 'serial'
         sampler = self._leader_sampler(robot_type, setup) if serial_leader else None
-        self.sim.ensure(robot_type, run, setup['topics'], names=names,
+        self.sim.ensure(robot_type, run and rc['sim']['available'], setup['topics'],
+                        names=rc['names'] or names,
                         state_topic=ft if (run and not own_reason) else None,
-                        leader_sampler=sampler, leader_pub=serial_leader)
+                        leader_sampler=sampler, leader_pub=serial_leader,
+                        limits=rc['limits'])
         sim = self.sim.view()
         sim.update(can_own_state=not own_reason, own_reason=own_reason, twin=bool(
             setup.get('sim_twin')), joint_map=setup.get('joint_map') or {})
@@ -742,7 +767,7 @@ class Hardware:
             'jog_running': extra.get('jog_active'), 'compare': compare,
             'calibration_active': extra.get('calibration_active'),
             'leader_state_supported': self.action_source_supported.get(
-                (robot_type, 'leader_state'))})
+                (robot_type, 'leader_state'))}, robot=rc, auto=auto)
         # what drives the simulated robot follows the selection: the leader arm, a mirror of
         # the physical follower (physical-to-simulation), or the operator (manual / script /
         # replay, started from the Planning page)

@@ -21,6 +21,20 @@ import React, { useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import clsx from 'clsx';
 import toast from 'react-hot-toast';
+import {
+  MdBackHand,
+  MdCancel,
+  MdCheckCircle,
+  MdKeyboard,
+  MdPrecisionManufacturing,
+  MdReplay,
+  MdSmartToy,
+  MdSportsEsports,
+  MdTimeline,
+  MdTune,
+  MdVideocam,
+  MdWarning,
+} from 'react-icons/md';
 import { StatusDot, Toggle } from '../../components/ui';
 import { hwPlanning } from '../hardware/hardwareApi';
 import { setHardwareStatus } from '../hardware/hardwareSlice';
@@ -32,10 +46,28 @@ const MANUAL = ['gui', 'keyboard', 'gamepad'];
 
 const ROBOT_TONE = { connected: 'ok', running: 'sky', lost: 'err', error: 'err', unused: 'idle', off: 'idle' };
 
+// short labels and icons; the full label and any reason are in the tooltip
+const SHORT = {
+  action: {
+    leader: ['Leader', MdPrecisionManufacturing],
+    hand_guided: ['Hand', MdBackHand],
+    gui: ['GUI', MdTune],
+    keyboard: ['Keys', MdKeyboard],
+    gamepad: ['Pad', MdSportsEsports],
+    script: ['Script', MdTimeline],
+    replay: ['Replay', MdReplay],
+  },
+  target: { follower: ['Real', MdPrecisionManufacturing], sim: ['Sim', MdSmartToy] },
+  observation: { follower: ['Real', MdPrecisionManufacturing], sim: ['Sim', MdSmartToy] },
+};
+// reasons that will not change with this robot and configuration: the option is hidden
+// (temporary ones - an arm not connected, simulation off - stay visible, disabled)
+const NEVER = /^(> \d+ joints|joints unknown|simulated follower|physical only|simulation only|no leader|no follower|needs Follower Only|needs Leader \+ Follower)$/;
+
 function robotLabel(r) {
   if (r.kind === 'simulated') return r.state === 'running' ? 'Running' : 'Off';
   if (!r.used) return 'Not used';
-  if (r.state === 'connected') return r.source === 'serial' ? 'Read-only session' : 'Connected';
+  if (r.state === 'connected') return r.source === 'serial' ? 'Serial' : 'Connected';
   return (r.state || 'unknown').replace(/_/g, ' ');
 }
 
@@ -48,36 +80,61 @@ export function selectionText(p) {
 
 function Choice({ label, kind, options, value, onPick, busy }) {
   return (
-    <div className="grid gap-1.5 md:grid-cols-[120px_1fr] md:items-center">
-      <div className="label">{label}</div>
-      <div className="flex flex-wrap gap-1.5" role="radiogroup" aria-label={label} data-plan-choice={kind}>
+    <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
+      <div className="label w-[52px] shrink-0">{label}</div>
+      <div className="flex flex-wrap gap-1" role="radiogroup" aria-label={label} data-plan-choice={kind}>
         {options.map((o) => {
           const on = o.id === value;
+          const [short, Icon] = SHORT[kind][o.id] || [o.label, null];
+          const hide = !o.available && !on && NEVER.test(o.short || '');
           return (
             <button
               key={o.id}
               type="button"
               role="radio"
               aria-checked={on}
+              hidden={hide}
               disabled={!o.available || busy}
-              title={o.available ? o.label : o.reason}
+              title={o.available ? o.label : `${o.label}: ${o.reason}`}
               onClick={() => !on && onPick(o.id)}
               data-option={o.id}
               data-available={o.available ? 'yes' : 'no'}
               className={clsx(
-                'rounded-pill border px-2.5 py-1 text-[12px] leading-tight transition-colors text-left',
+                hide ? 'hidden' : 'inline-flex',
+                'items-center gap-1.5 rounded-pill border px-2.5 py-1 text-[12px] leading-tight transition-colors',
                 on && o.available && 'bg-ink text-paper border-ink',
                 on && !o.available && 'border-signal-warn bg-signal-warnbg',
                 !on && o.available && 'border-rule bg-paper hover:border-ink',
                 !o.available && !on && 'border-rule text-ink-4 cursor-not-allowed'
               )}
             >
-              {o.label}
-              {!o.available && <span className="block text-[10.5px] text-ink-4">{o.short}</span>}
+              {Icon && <Icon className="text-[14px] shrink-0" aria-hidden />}
+              <span>{short}</span>
+              {!o.available && <span className="text-[10.5px] text-ink-4">· {o.short}</span>}
             </button>
           );
         })}
       </div>
+    </div>
+  );
+}
+
+const CHECK_ICON = { ok: MdCheckCircle, warn: MdWarning, err: MdCancel };
+const CHECK_TONE = { ok: 'text-signal-ok', warn: 'text-signal-warn', err: 'text-signal-err' };
+
+function Checks({ checks }) {
+  if (!checks || !checks.length) return null;
+  return (
+    <div className="flex flex-wrap gap-x-3 gap-y-1 text-[12px]" data-plan-checks>
+      {checks.map((c) => {
+        const Icon = CHECK_ICON[c.state] || MdWarning;
+        return (
+          <span key={c.id} className="inline-flex items-center gap-1" title={c.detail} data-plan-check={c.id} data-check-state={c.state}>
+            <Icon className={clsx('text-[14px]', CHECK_TONE[c.state])} aria-hidden />
+            {c.label}
+          </span>
+        );
+      })}
     </div>
   );
 }
@@ -116,7 +173,7 @@ export default function PlanningSetup({ compact = false }) {
     if (compact) return null;
     return (
       <div className="border-b border-rule bg-paper px-5 py-2 text-[12px] text-ink-3" data-plan-setup="unknown">
-        <StatusDot tone="idle" label={offline ? 'Hardware status unavailable (host service not reachable)' : 'Reading the hardware…'} />
+        <StatusDot tone="idle" label={offline ? 'Hardware status unavailable' : 'Reading the hardware…'} />
       </div>
     );
   }
@@ -136,13 +193,23 @@ export default function PlanningSetup({ compact = false }) {
   const rec = p.record;
   const sim = status.sim || p.sim || {};
   const simMode = status.mode === 'simulation';
-  const leaderSim = status.mode === 'leader_sim';
+  const leaderSim = p.config === 'leader_sim';
+  const robot = p.robot || {};
+  const camsLive = p.cameras.filter((c) => c.live !== false).length;
+  const recTitle = [rec.reason, ...(rec.streams || []).map((x) => `· ${x.label}`)].filter(Boolean).join('\n');
 
   const summary = (
     <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 min-w-0">
-      <span className="chip-ink" data-plan-config={p.config}>
+      <span className="chip-ink" data-plan-config={p.config} data-plan-auto={p.auto ? 'yes' : 'no'} title={p.auto ? 'Only a physical leader: its simulated follower is the target' : undefined}>
         {p.config_label}
+        {p.auto && <span className="ml-1 opacity-70">· auto</span>}
       </span>
+      {robot.dof > 0 && (
+        <span className="inline-flex items-center gap-1 text-[12px] text-ink-3" data-plan-robot-model title={`${robot.source}: ${robot.names.join(', ')}`}>
+          <MdPrecisionManufacturing className="text-[14px]" aria-hidden />
+          {robot.dof} joints{robot.gripper ? ' · gripper' : ''}
+        </span>
+      )}
       {p.robots
         .filter((r) => !(leaderSim && r.id === 'follower') && (r.used || r.kind === 'physical' || !simMode))
         .map((r) => (
@@ -158,21 +225,24 @@ export default function PlanningSetup({ compact = false }) {
             />
           </span>
         ))}
-      {p.cameras.map((c) => (
-        <span key={c.name} data-plan-camera={c.name} title={c.topic}>
-          <StatusDot tone={c.live === false ? 'err' : c.live ? 'ok' : 'idle'} label={<span className="text-ink-3">{c.name}</span>} />
+      {p.cameras.length > 0 && (
+        <span className="inline-flex items-center gap-1 text-[12px]" title={p.cameras.map((c) => `${c.name}: ${c.topic}`).join('\n')}>
+          <MdVideocam className={clsx('text-[14px]', camsLive === p.cameras.length ? 'text-signal-ok' : 'text-signal-err')} aria-hidden />
+          {p.cameras.map((c) => (
+            <span key={c.name} data-plan-camera={c.name} className={clsx(c.live === false ? 'text-signal-err' : 'text-ink-3')}>
+              {c.name}
+            </span>
+          ))}
         </span>
-      ))}
+      )}
       <span className="flex-1" />
-      <span data-plan-record={rec.available ? 'ready' : 'blocked'} className="text-[12px]" title={rec.reason || undefined}>
-        <StatusDot tone={rec.available ? 'ok' : 'warn'} label={rec.available ? `Ready to record · ${selectionText(p)}` : `${selectionText(p)} · not ready`} />
+      <span data-plan-record={rec.available ? 'ready' : 'blocked'} className="text-[12px]" title={recTitle}>
+        <StatusDot tone={rec.available ? 'ok' : 'warn'} label={rec.available ? `Ready · ${selectionText(p)}` : `${selectionText(p)} · not ready`} />
       </span>
     </div>
   );
 
-  const control = (
-    <ControlFor robotType={robotType} status={status} p={p} sim={sim} compact={compact} />
-  );
+  const control = <ControlFor robotType={robotType} status={status} p={p} sim={sim} compact={compact} />;
 
   if (compact) {
     return (
@@ -181,6 +251,7 @@ export default function PlanningSetup({ compact = false }) {
           <span className="label">Control</span>
           <span className="font-medium truncate">{selectionText(p)}</span>
         </div>
+        <Checks checks={p.checks} />
         {!rec.available && <div className="text-[11.5px] text-signal-warn">{rec.reason}</div>}
         {control}
       </div>
@@ -197,27 +268,17 @@ export default function PlanningSetup({ compact = false }) {
       </div>
       {open && (
         <div className="grid gap-4 border-t border-rule px-5 py-3 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-          <div className="space-y-2.5 min-w-0">
-            <Choice label="Action source" kind="action" options={p.action_sources} value={sel.action} onPick={pick('action')} busy={busy} />
-            <Choice label="Target robot" kind="target" options={p.targets} value={sel.target} onPick={pick('target')} busy={busy} />
-            <Choice label="Observation" kind="observation" options={p.observations} value={sel.observation} onPick={pick('observation')} busy={busy} />
+          <div className="space-y-2 min-w-0">
+            <Choice label="Source" kind="action" options={p.action_sources} value={sel.action} onPick={pick('action')} busy={busy} />
+            <Choice label="Target" kind="target" options={p.targets} value={sel.target} onPick={pick('target')} busy={busy} />
+            <Choice label="State" kind="observation" options={p.observations} value={sel.observation} onPick={pick('observation')} busy={busy} />
             <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 pt-1">
               {!simMode && !leaderSim && (
-                <span data-plan-sim-twin={sim.twin ? 'on' : 'off'}>
+                <span data-plan-sim-twin={sim.twin ? 'on' : 'off'} title="Run a simulated twin next to the physical robot">
                   <Toggle checked={!!sim.twin} disabled={busy} onChange={(v) => save({ sim_twin: v })} label={<span className="text-[12px]">Simulated twin</span>} />
                 </span>
               )}
-              <details className="text-[12px]">
-                <summary className="cursor-pointer text-ink-3 hover:text-ink">What is recorded</summary>
-                <ul className="mt-1.5 space-y-0.5" data-plan-streams>
-                  {rec.streams.map((s) => (
-                    <li key={s.id} className="flex gap-2">
-                      <span className="text-ink-4">·</span>
-                      <span>{s.label}</span>
-                    </li>
-                  ))}
-                </ul>
-              </details>
+              <Checks checks={p.checks} />
             </div>
             {!rec.available && (
               <div className="text-[12px] text-signal-warn" data-plan-record-reason>
@@ -248,9 +309,9 @@ function ControlFor({ robotType, status, p, sim, compact }) {
   // the physical follower is the target
   let body = null;
   if (action === 'leader') {
-    body = <Note>Move the leader arm; the follower follows it (bridge.py teleoperation).</Note>;
+    body = <Note>Move the leader; the follower follows.</Note>;
   } else if (action === 'hand_guided') {
-    body = <Note>Move the follower by hand. Its joints are recorded as both state and action.</Note>;
+    body = <Note>Move the follower by hand.</Note>;
   } else if (MANUAL.includes(action)) {
     body = (
       <JogPanel
@@ -264,7 +325,7 @@ function ControlFor({ robotType, status, p, sim, compact }) {
   return (
     <div className="space-y-3">
       {body}
-      {sim.running && <Note>The simulated robot mirrors the physical follower.</Note>}
+      {sim.running && <Note>Twin mirrors the follower.</Note>}
       {!compact && <Compare compare={p.compare} />}
     </div>
   );

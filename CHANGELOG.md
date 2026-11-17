@@ -2,6 +2,13 @@
 
 ## 2.0.0, renamed (2026-11-13)
 
+* **Robot-aware Planning.** Options come from the robot's capabilities (joints, gripper, limits,
+  simulation model, serial access, control methods) - from a custom robot's URDF or the robot
+  configuration, never from a model name. Only a physical leader → its simulated follower is the
+  target automatically. A check row (robot, mapping, gripper, limits, cameras, runtime) validates
+  before recording. Compact panel: icons and short labels; options a robot can never use are
+  hidden. Keyboard control up to 9 joints.
+
 * **Physical Leader + Simulated Follower:** a new configuration for one physical arm. The leader,
   read by bridge.py or by RawBot Studio's own serial session (30 Hz), drives the simulated
   follower in real time (joint mapping by name, ticks → radians with per-joint sign / offset,

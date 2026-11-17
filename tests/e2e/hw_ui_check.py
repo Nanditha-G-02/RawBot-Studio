@@ -220,8 +220,9 @@ with sync_playwright() as p:
     page.locator('[data-action="capture-stop"]').click()
     expect(page.get_by_text(re.compile(r'Saved \d+ samples'))).to_be_visible(timeout=10000)
     shot(page, 'hw06_leader_only')
-    # recording needs a follower: here, the simulated robot (Planning → Robot & control)
-    record_blocked(page, 'turn on Simulated twin')
+    # only a leader: the simulated follower is the target; bridge.py still publishes the
+    # follower state topic here, so the simulated follower cannot take it
+    record_blocked(page, 'already publishes /joint_states')
 
     # ---------------------------------------------------------------- 3. follower only
     step('3 Follower Only: hand-guided recording, direct control (jog) once teleop is off')

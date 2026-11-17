@@ -93,9 +93,11 @@ class SimRobot:
 
     # ---- configuration ----------------------------------------------------------------
     def ensure(self, robot_type, run, topics, names=None, state_topic=None,
-               leader_sampler=None, leader_pub=False):
-        """Called by the manager on every status: start / stop, joints, allowed topics."""
+               leader_sampler=None, leader_pub=False, limits=None):
+        """Called by the manager on every status: start / stop, joints, allowed topics.
+        limits: the robot's joint limits (URDF), applied when the joints change."""
         with self.lock:
+            self.default_limits = dict(limits or {})
             self.leader_sampler = leader_sampler if run else None
             self.leader_pub = bool(run and leader_pub and leader_sampler)
             if robot_type != self.robot_type:
@@ -119,11 +121,12 @@ class SimRobot:
     def _reset(self, names):
         n = len(names)
         self.names = list(names)
-        self.lo = [-math.pi] * n
-        self.hi = [math.pi] * n
-        self.pos = [0.0] * n
+        dl = getattr(self, 'default_limits', None) or {}
+        self.lo = [float(dl[x][0]) if x in dl else -math.pi for x in names]
+        self.hi = [float(dl[x][1]) if x in dl else math.pi for x in names]
+        self.pos = [min(max(0.0, lo), hi) for lo, hi in zip(self.lo, self.hi)]
         self.vel = [0.0] * n
-        self.target = [0.0] * n
+        self.target = list(self.pos)
         self.hold = {}
         self.script = self.replay = None
         self.drive = 'manual'

@@ -24,6 +24,7 @@ simulated robot publishing that topic. The dataset format does not change.
 """
 
 from physios_trainer.hardware import capabilities as capmod
+from physios_trainer.hardware import robotcaps
 from physios_trainer.hardware.registry import MODES
 
 CONFIGS = {
@@ -60,12 +61,17 @@ def _opt(key, label, reason='', short=''):
             'short': '' if not reason else (short or 'not available')}
 
 
-def options(mode, arms, caps, sim, selection=None, cameras=None, extra=None):
+def options(mode, arms, caps, sim, selection=None, cameras=None, extra=None, robot=None,
+            auto=False):
     """mode: hardware configuration; arms: arm cards; caps: capabilities.compute();
     sim: SimRobot.view() plus {'can_own_state': bool, 'own_reason': str};
     selection: stored {action, target, observation}; cameras: [{name, topic, live}];
-    extra: {'jog_running': bool, 'compare': {...}|None}."""
+    extra: {'jog_running': bool, 'compare': {...}|None}; robot: robotcaps.capabilities()
+    (joints, gripper, simulation model, control methods); auto: only a physical leader is
+    there, so the simulated follower was chosen as the target by itself."""
     extra = extra or {}
+    robot = robot or robotcaps.capabilities('', ['?'])     # unknown robot: nothing gated
+    rctl = robot.get('controls') or {}
     used = MODES.get(mode, MODES['leader_follower'])['arms']
     L, F = arms.get('leader') or {}, arms.get('follower') or {}
     lr = L.get('state') == 'connected' and L.get('source') == 'ros'
@@ -90,6 +96,11 @@ def options(mode, arms, caps, sim, selection=None, cameras=None, extra=None):
 
     # ---- target availability per action
     def target_ok(action, target):
+        c = rctl.get(action)
+        if c and not c['available']:          # the robot itself does not allow this control
+            return (c['reason'], c['short'])
+        if target == 'sim' and not robot['sim']['available']:
+            return (robot['sim']['reason'], robot['sim']['short'])
         if target == 'sim':
             if not sim_on:
                 return sim_reason
@@ -230,8 +241,47 @@ def options(mode, arms, caps, sim, selection=None, cameras=None, extra=None):
          'state': 'running' if sim_on else 'off', 'source': 'sim',
          'joints': list(sim.get('names') or []) if sim_on else []},
     ]
+    # ---- checks before starting: robot, joint mapping, limits, cameras, runtime
+    def check(cid, label, ok, detail='', warn=False):
+        return {'id': cid, 'label': label, 'state': 'ok' if ok else ('warn' if warn else 'err'),
+                'detail': detail}
+    checks = [check('robot', '%d joints%s' % (robot['dof'], ' · gripper' if robot['gripper']
+                                               else ''), robot['dof'] > 0,
+                    robot['source'] or 'joints unknown')]
+    if a == 'leader':
+        li = sim.get('leader_in') or {}
+        src = li.get('names') or list((L.get('joints') or {}).keys())
+        tgt = robot['names'] if tg == 'sim' else list((F.get('joints') or {}).keys())
+        if src and tgt:
+            m = robotcaps.mapping(src, tgt, robot['gripper'])
+            checks.append(check('mapping', 'Mapping %d/%d' % (m['matched'], m['total']),
+                                not m['missing'], 'missing on the leader: %s' % ', '.join(
+                                    m['missing']) if m['missing'] else 'by joint name'))
+            if robot['gripper']:
+                checks.append(check('gripper', 'Gripper', m['gripper'],
+                                    robot['gripper'] if m['gripper'] else
+                                    'the leader has no %s' % robot['gripper']))
+            if m['missing'] and not reason:
+                reason = 'The leader has no joint %s of the %s.' % (
+                    ', '.join(m['missing']), 'simulated follower' if tg == 'sim' else 'follower')
+        if tg == 'sim' and li:
+            checks.append(check('limits', 'Limits', not li.get('at_limit'),
+                                'at limit: %s' % ', '.join(li['at_limit']) if li.get('at_limit')
+                                else 'within limits', warn=True))
+    if cameras:
+        live = [c for c in cameras if c.get('live') is not False]
+        checks.append(check('cameras', 'Cameras %d/%d' % (len(live), len(cameras)),
+                            len(live) == len(cameras), ', '.join(c['name'] for c in cameras)))
+    if action_param == 'leader_state':
+        checks.append(check('runtime', 'Runtime', extra.get('leader_state_supported') is not
+                            False, 'robot image supports leader_state'
+                            if extra.get('leader_state_supported') else 'rebuild the robot image'
+                            if extra.get('leader_state_supported') is False else 'not checked yet',
+                            warn=extra.get('leader_state_supported') is None))
+
     return {
-        'config': config, 'config_label': CONFIGS[config], 'robots': robots,
+        'config': config, 'config_label': CONFIGS[config], 'auto': bool(auto), 'robot': robot,
+        'checks': checks, 'robots': robots,
         'action_sources': actions, 'targets': targets, 'observations': observations,
         'cameras': list(cameras or []), 'selection': sel,
         'record': {'available': not reason, 'reason': reason, 'action_param': action_param,

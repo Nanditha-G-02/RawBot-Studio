@@ -81,7 +81,7 @@ class Service:
         # flexible robot setup: arms, connections, calibration, jog (hardware/manager.py)
         self.hardware = Hardware(self.repo / 'workspace' / 'physios' / 'hardware', self.envs,
                                  rollouts=self.rollouts, notifier=self.notifier, log=log,
-                                 monitor=autostart_optimizer)
+                                 monitor=autostart_optimizer, robots_dir=self.robots.root)
 
     def _run_finished(self, run):
         prog = run.get('progress') or {}

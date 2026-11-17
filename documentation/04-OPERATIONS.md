@@ -284,6 +284,25 @@ velocities are not a separate column (the dataset format stays the same); they f
 positions. Each plan take also stores how it was recorded (configuration, action source, target,
 observation, cameras); Data shows it as *Recorded with*.
 
+#### Robot-aware options
+
+Planning builds its options from what the selected robot is, not from its model name
+(`backend/physios_trainer/hardware/robotcaps.py`):
+
+* **Joints, limits, gripper**: a registered custom robot's URDF (movable joints, soft limits, the
+  URDF → ROS mapping of its configuration); otherwise the robot configuration's joint order or the
+  arms' own joints. A joint named like *grip / finger / jaw / claw / hand* is the gripper.
+* **Simulation**: available as soon as the joints are known; the simulated robot uses the URDF
+  limits.
+* **Controls**: GUI, script and replay for any robot; keyboard up to 9 joints (Q/A … O/L);
+  gamepad up to 6.
+* **Only a physical leader** (Leader Only, or Leader + Follower with no follower ever set up):
+  the simulated follower becomes the target by itself (*auto* next to the configuration).
+
+Options a robot or configuration can never use are hidden; temporarily unavailable ones stay
+greyed out with a short reason. The check row (robot, joint mapping, gripper, limits, cameras,
+runtime) must be green before recording; a leader missing a joint of the target blocks it.
+
 #### Physical Leader + Simulated Follower (one arm)
 
 1. Home or Robots → Hardware setup: choose **Physical Leader + Simulated Follower**. No follower
@@ -414,7 +433,7 @@ Everything runs from the repository itself, without ROS, a GPU or a robot:
 ```bash
 cd backend
 python3 -m pytest -q tests            # gateway: 22
-python3 -m pytest -q trainer_tests    # training service, hardware, planning setup, standalone layout: 145 (1 skipped)
+python3 -m pytest -q trainer_tests    # training service, hardware, planning setup, standalone layout: 149 (1 skipped)
 cd ../robot/src/physical_ai_server
 python3 -m pytest -q test/planning    # planning engine: 46
 cd ../../../frontend && CI=true npm run build   # production build, lint warnings fail it

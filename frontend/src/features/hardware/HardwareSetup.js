@@ -756,7 +756,7 @@ export function JogPanel({ robotType, status, cap, input = 'gui' }) {
               {input === 'gamepad' ? (
                 <StatusDot tone={pad ? 'ok' : 'idle'} label={pad ? pad.slice(0, 60) : 'No gamepad - connect one and press any button'} />
               ) : (
-                <span className="text-ink-3">Hold Q/A, W/S, E/D, R/F, T/G, Y/H for joints 1-6 (+/−).</span>
+                <span className="text-ink-3">Hold Q/A, W/S, E/D … one key pair per joint (+ / −).</span>
               )}
             </div>
           )}
