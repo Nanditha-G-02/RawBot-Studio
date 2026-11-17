@@ -25,6 +25,8 @@ import math
 import threading
 import time
 
+from physios_trainer.hardware import kinematics as kin
+
 SIM_TOPIC = '/rawbot/sim/joint_states'
 # the leader arm's joints when RawBot Studio reads the leader itself (serial session, no
 # bridge.py): a JointState that physical_ai_server records as the action
@@ -81,6 +83,9 @@ class SimRobot:
         self.published = 0
         self.started_at = None
         self.rec = None           # trajectory capture: {'t0': float, 'samples': [[t, ...]]}
+        self.kin = None           # kinematics.Chain of the robot, when it has one
+        self.ws = None            # workspace limits (kinematics.workspace_from_profile)
+        self.blocked = None       # why the last step was held (workspace)
         # leader input: () -> (age, names, values, extra) when RawBot Studio reads the leader
         # over serial; otherwise the leader ROS topic is sampled
         self.leader_sampler = None
@@ -93,11 +98,14 @@ class SimRobot:
 
     # ---- configuration ----------------------------------------------------------------
     def ensure(self, robot_type, run, topics, names=None, state_topic=None,
-               leader_sampler=None, leader_pub=False, limits=None, pairs=None):
+               leader_sampler=None, leader_pub=False, limits=None, pairs=None,
+               kinematics=None):
         """Called by the manager on every status: start / stop, joints, allowed topics.
         limits: the robot's joint limits (URDF), applied when the joints change."""
         with self.lock:
             self.default_limits = dict(limits or {})
+            if kinematics is not None:
+                self.kin, self.ws = kinematics.get('model'), kinematics.get('workspace')
             self.pairs = dict(pairs or {})     # target joint -> leader joint (mixed robots)
             self.leader_sampler = leader_sampler if run else None
             self.leader_pub = bool(run and leader_pub and leader_sampler)
@@ -209,6 +217,24 @@ class SimRobot:
                 self.script = self.replay = None
                 self.hold = {}
                 self.target = list(self.pos)
+            elif cmd == 'cartesian':
+                # move the tool by (dx, dy, dz) metres: inverse kinematics on the robot model
+                if not self.kin:
+                    raise ValueError('This robot has no kinematic model.')
+                self._manual()
+                q = dict(zip(self.names, self.target))
+                p = self.kin.fk(q)
+                d = [float(v) for v in (body.get('delta') or [0, 0, 0])][:3]
+                goal = [p[i] + d[i] for i in range(3)]
+                why = kin.check(self.ws, goal)
+                if why:
+                    raise ValueError('Not allowed: the tool would be %s.' % why)
+                q2, err = self.kin.ik(q, goal)
+                if err > 0.005:
+                    raise ValueError('Out of reach (%.0f mm off).' % (err * 1000))
+                for i, n in enumerate(self.names):
+                    if n in q2:
+                        self.target[i] = self._clamp(i, q2[n])
             elif cmd == 'set_pose':
                 # line up with a physical arm (virtual teleoperation start): no motion
                 for k, v in (body.get('pose') or {}).items():
@@ -352,11 +378,37 @@ class SimRobot:
             # joint speed
             fast = self.drive in ('leader', 'follower', 'replay')
             lim = (self.speed * (4.0 if fast else 1.0)) * dt
+            nxt = []
             for i in range(n):
                 d = self.target[i] - self.pos[i]
-                d = max(-lim, min(lim, d))
-                self.pos[i] += d
-                self.vel[i] = d / dt if dt > 0 else 0.0
+                nxt.append(self.pos[i] + max(-lim, min(lim, d)))
+            # workspace: a step the operator commands (GUI, keys, pad, script, replay, tool
+            # moves) that would take the tool out (table, base, keep-outs) is held. Following a
+            # real arm (leader or mirror) is never held - the model is approximate - only
+            # flagged, so the recorded state stays what the operator did.
+            why = flag = None
+            if self.kin and self.ws:
+                out = kin.check(self.ws, self.kin.fk(dict(zip(self.names, nxt))))
+                if self.drive in ('leader', 'follower'):
+                    flag = out
+                elif out and not kin.check(self.ws, self.kin.fk(dict(zip(self.names,
+                                                                          self.pos)))):
+                    why = out        # (already outside, e.g. after a limits change: let it out)
+            if why:
+                # hold only the joints whose motion takes the tool out; the others still move
+                # (e.g. pan along the table while the elbow is held at its edge)
+                keep = list(self.pos)
+                for i in range(n):
+                    trial = list(keep)
+                    trial[i] = nxt[i]
+                    if not kin.check(self.ws, self.kin.fk(dict(zip(self.names, trial)))):
+                        keep = trial
+                nxt = keep
+            self.blocked = why or flag
+            for i in range(n):
+                v = nxt[i]
+                self.vel[i] = (v - self.pos[i]) / dt if dt > 0 else 0.0
+                self.pos[i] = v
             if self.rec is not None and len(self.rec['samples']) < 200000:
                 self.rec['samples'].append([round(now - self.rec['t0'], 4)] + [
                     round(p, 5) for p in self.pos])
@@ -418,7 +470,10 @@ class SimRobot:
 
     def view(self):
         with self.lock:
+            tool = self.kin.fk(dict(zip(self.names, self.pos))) if self.kin else None
             out = {'running': self.running, 'drive': self.drive, 'names': list(self.names),
+                   'tool_mm': [round(v * 1000, 1) for v in tool] if tool else None,
+                   'kinematics': bool(self.kin), 'blocked': self.blocked,
                    'positions': [round(p, 5) for p in self.pos],
                    'velocities': [round(v, 5) for v in self.vel],
                    'target': [round(p, 5) for p in self.target],

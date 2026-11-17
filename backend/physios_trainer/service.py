@@ -889,7 +889,17 @@ class Service:
             'robot_type': info.get('robot_type'),
             'policy': ck.get('policy_type'), 'run_id': rid, 'step': step,
             'dataset_id': ds_id, 'env': env_name,
+            # hybrid control input (the simulated robot) and workspace limits of the robot
+            'operator_topic': '/rawbot/sim/joint_states',
         }
+        try:
+            hrt = self.hardware.active_robot or info.get('robot_type')
+            model, ws = self.hardware._kinematics(hrt, self.hardware.reg.setup(hrt))
+            if model and ws:
+                cfg['kinematics'] = {'joints': model.chain, 'names': model.joint_of,
+                                     'workspace': ws}
+        except Exception:  # noqa: BLE001 - no model: the envelope checks still apply
+            pass
         if (tc.get('policy') or {}).get('type') == 'smolvla' and not cfg['task']:
             errors.append('SmolVLA needs the task instruction.')
         return {'ok': not errors, 'errors': errors, 'warnings': warnings, 'config': cfg,

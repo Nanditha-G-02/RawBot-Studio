@@ -343,6 +343,34 @@ follower, the follow mode and the mapping check.
 observation, cameras, robot joints and pairs) and refreshes `meta/rawbot_robot.json` (robot type,
 joint order, topics, cameras). LeRobot ignores both files, so datasets stay loadable.
 
+#### Tool moves and workspace limits
+
+When the robot has a kinematic model (a custom robot's URDF, or the SO-101 family), GUI control of
+the simulated robot adds a tool pad (Fwd / Back / Left / Right / Up / Down, 1 cm per click,
+repeats while held) and shows the tool position. Steps that would take the tool below the table,
+off the table area near the table, close to the base or into a keep-out are held with a short
+*Held: …* line; other joints keep moving. Follow mode and host rollout hold the arm the same way.
+The limits come from the planning workspace (Planning → workspace); `workspace_guard: false` in
+`POST /hardware/setup` switches them off. The SO-101 model is approximate: keep a margin.
+
+#### Simulated cameras
+
+In a simulated set-up, a configured camera with no real publisher is rendered from the simulated
+robot (front view, or a wrist view for names with wrist / grip / hand / tool) by any open RawBot
+Studio page and published on the camera's own topic, so the recorder records it unchanged. It shows
+as *name · sim* and is live only while frames arrive; real cameras always take precedence.
+
+#### Policy and Human + AI recording
+
+1. Inference → Host rollout: load the model and start it as usual.
+2. Planning → Robot & control: source **Policy**, target **Real**. The panel shows the policy
+   status with **❚❚ Pause** / **▶ Run** and **Take over**.
+3. Record as usual. **Take over** lines the simulated robot up with the arm and gives you its
+   GUI / tool pad; the rollout worker sends your moves through the same limits. **Hand back** returns
+   control to the policy.
+4. Each saved take keeps when you took over (`annotations` in `meta/rawbot_recordings.jsonl`,
+   seconds from the take start; `source` is `policy` or `hybrid`).
+
 #### Physical Leader + Simulated Follower (one arm)
 
 1. Home or Robots → Hardware setup: choose **Physical Leader + Simulated Follower**. No follower

@@ -172,9 +172,13 @@ def make_handler(svc):
                                 env=b.get('env'), cameras=b.get('cameras'),
                                 joints=b.get('joints'), sim_twin=b.get('sim_twin'),
                                 selection=b.get('selection'), joint_map=b.get('joint_map'),
-                                joint_pairs=b.get('joint_pairs'))
+                                joint_pairs=b.get('joint_pairs'), workspace=b.get('workspace'),
+                                workspace_guard=b.get('workspace_guard'),
+                                sim_cameras=b.get('sim_cameras'))
             if m == 'POST' and p == ['sim']:
                 return hw.sim_command(rt, b)
+            if m == 'POST' and p == ['hybrid']:
+                return hw.hybrid(rt, bool(b.get('on')))
             if m == 'POST' and p == ['action-source']:
                 return hw.report_action_source(rt, b.get('supported'), b.get('source'))
             if m == 'POST' and p == ['detect']:

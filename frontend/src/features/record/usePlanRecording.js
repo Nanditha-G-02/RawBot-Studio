@@ -106,6 +106,10 @@ export function usePlanRecording(active) {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const lastPhase = useRef(phase);
+  // policy takes: when the take ends, the operator's takeovers are kept with it
+  const policyTake = useRef(null);
+  const rolloutRef = useRef(null);
+  rolloutRef.current = hwPlan?.rollout || null;
 
   const refresh = useCallback(async () => {
     try {
@@ -135,9 +139,22 @@ export function usePlanRecording(active) {
     if (lastPhase.current !== phase && phase === TaskPhase.READY) {
       setTimeout(refresh, 400);
       setTimeout(refresh, 2000);
+      const take = policyTake.current;
+      policyTake.current = null;
+      if (take) {
+        const ro = rolloutRef.current || {};
+        const spans = [...(ro.interventions || [])];
+        if (ro.op_since) spans.push([ro.op_since, null]);
+        // the take is saved shortly after the recorder stops; retry until it is
+        const tryAnnotate = (n) =>
+          call('record.annotate', { ...take, interventions: spans }).catch(() => {
+            if (n > 0) setTimeout(() => tryAnnotate(n - 1), 2000);
+          });
+        setTimeout(() => tryAnnotate(4), 1500);
+      }
     }
     lastPhase.current = phase;
-  }, [phase, refresh]);
+  }, [phase, refresh, call]);
 
   const plan = state?.plan || null;
   const episodes = plan ? [...plan.episodes].sort((a, b) => a.order - b.order) : [];
@@ -174,6 +191,7 @@ export function usePlanRecording(active) {
       let begin;
       try {
         begin = await call('record.begin', { plan_id: plan.id, episode_id: current.id, retake, ...(setup ? { setup } : {}) });
+        policyTake.current = setup?.action === 'policy' ? { plan_id: plan.id, episode_id: current.id } : null;
       } catch (e) {
         return { success: false, message: e.message };
       }

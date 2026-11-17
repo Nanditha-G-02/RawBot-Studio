@@ -250,6 +250,26 @@ The training service keeps a small hardware manager (`backend/physios_trainer/ha
   `/rawbot/leader/joint_states`; physical_ai_server's `action_source = leader_state` records that
   topic as the action (its `leader_state_topic` parameter doubles as the feature check).
 
+* `kinematics.py` (stdlib, loaded by the training service and both motion workers): a serial
+  chain from a custom robot's URDF joints (URDF → ROS names from its configuration), or the
+  approximate SO-101 chain for the SO-101 family; forward kinematics, damped-least-squares IK on
+  the tool position, and workspace checks from the planning workspace (floor, table area near the
+  table, base keep-out, keep-out columns). No model: no workspace checks, nothing else changes.
+  The simulated robot holds operator-driven joints whose step would take the tool out (others
+  keep moving) and only flags leader / mirror drives; follow mode and host rollout hold the arm.
+* Simulated cameras: when the simulated robot owns the state topic and a configured camera has no
+  real publisher, the status lists it in `planning.sim_cameras` ('scene' or 'wrist' view). A
+  RawBot Studio page (`SimCameraPublisher`, three.js, off-screen 320 × 240) renders the chain and
+  publishes JPEG `CompressedImage` frames on that topic at 10 Hz; the camera counts as live only
+  while frames arrive (< 2.5 s old), so recording is never enabled from the configuration alone.
+* Policy and hybrid recording: action source `policy` (target: the physical follower) records
+  while a host rollout runs. *Take over* (`POST /hardware/hybrid`) lines the simulated robot up
+  with the follower and switches the rollout worker to the operator: the worker publishes the
+  simulated robot's joints instead of the policy's actions, through the same safety filter, so
+  there is one command owner. The takeover spans are kept with the take (`record.annotate`) and
+  in `meta/rawbot_recordings.jsonl` as `annotations` (`source` hybrid / policy, seconds from the
+  take start).
+
 `bridge.py` keeps ownership of the serial ports. Everything that moves an arm goes through it
 over ROS, as before.
 
@@ -272,6 +292,7 @@ own REST API (`/api/v1`) remains available for scripts and tools.
 | On-robot inference | Inference · Container inference → Start | operator click (over `/ros`); the gateway's `POST /api/v1/ros/task` keeps its `"confirm": true` rule (HTTP 428) for scripts |
 | Host rollout load | Inference · Host rollout → Load model | compatibility + checklist; worker publishes nothing |
 | Host rollout run | Inference · Host rollout → Start moving | second confirmation; worker enforces envelope, per-step limits, stale-data and heartbeat holds, duration cap; emergency stop kills the worker |
+| Hybrid takeover | Planning → Robot & control, source *Policy* → Take over / Hand back | only while the rollout runs; the rollout worker stays the command owner and applies the same filter, workspace holds and stale-operator hold; *Stop all* ends both |
 | Hardware test | Robot Management | Stage 2, connected, checklist, typed robot name → server token (180 s, single use) → Start motion; pre-hold detects wrong mapping; STOP; server re-checks samples |
 | Start-up | scripts, containers | start services only; the robot-runtime bringup serves ROS services and topics and never commands motion |
 

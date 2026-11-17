@@ -17,7 +17,7 @@
 // with only the compatible ones enabled (hardware/planning.py decides, from the live hardware
 // status). Below them, the control for the current choice.
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import clsx from 'clsx';
 import toast from 'react-hot-toast';
@@ -25,6 +25,7 @@ import {
   MdBackHand,
   MdCancel,
   MdCheckCircle,
+  MdAutoAwesome,
   MdKeyboard,
   MdPrecisionManufacturing,
   MdReplay,
@@ -36,7 +37,7 @@ import {
   MdWarning,
 } from 'react-icons/md';
 import { StatusDot, Toggle } from '../../components/ui';
-import { hwPlanning } from '../hardware/hardwareApi';
+import { hwHybrid, hwPlanning, rolloutCommand, rolloutHeartbeat } from '../hardware/hardwareApi';
 import { setHardwareStatus } from '../hardware/hardwareSlice';
 import { useHardwareStatus } from '../hardware/useHardwareGate';
 import { JogPanel } from '../hardware/HardwareSetup';
@@ -57,6 +58,7 @@ const SHORT = {
     gamepad: ['Pad', MdSportsEsports],
     script: ['Script', MdTimeline],
     replay: ['Replay', MdReplay],
+    policy: ['Policy', MdAutoAwesome],
   },
   target: { follower: ['Real', MdPrecisionManufacturing], sim: ['Sim', MdSmartToy] },
   observation: { follower: ['Real', MdPrecisionManufacturing], sim: ['Sim', MdSmartToy] },
@@ -156,7 +158,7 @@ export default function PlanningSetup({ compact = false }) {
     }
   });
   const pl = status?.planning;
-  const needs = !!pl && (!pl.record.available || pl.selection.target === 'sim' || SIM_LEADS.includes(pl.selection.action));
+  const needs = !!pl && (!pl.record.available || pl.selection.target === 'sim' || SIM_LEADS.includes(pl.selection.action) || pl.selection.action === 'policy');
   const open = stored === null ? needs : stored === '1';
   const toggleOpen = () => {
     const v = open ? '0' : '1';
@@ -231,8 +233,15 @@ export default function PlanningSetup({ compact = false }) {
         <span className="inline-flex items-center gap-1 text-[12px]" title={p.cameras.map((c) => `${c.name}: ${c.topic}`).join('\n')}>
           <MdVideocam className={clsx('text-[14px]', camsLive === p.cameras.length ? 'text-signal-ok' : 'text-signal-err')} aria-hidden />
           {p.cameras.map((c) => (
-            <span key={c.name} data-plan-camera={c.name} className={clsx(c.live === false ? 'text-signal-err' : 'text-ink-3')}>
+            <span
+              key={c.name}
+              data-plan-camera={c.name}
+              data-camera-live={c.live === false ? 'no' : 'yes'}
+              data-camera-sim={c.sim ? 'yes' : undefined}
+              className={clsx(c.live === false ? 'text-signal-err' : 'text-ink-3')}
+            >
               {c.name}
+              {c.sim && <span className="text-ink-4"> · sim</span>}
             </span>
           ))}
         </span>
@@ -314,6 +323,8 @@ function ControlFor({ robotType, status, p, sim, compact }) {
     body = <Note>Move the leader; the follower follows.</Note>;
   } else if (action === 'hand_guided') {
     body = <Note>Move the follower by hand.</Note>;
+  } else if (action === 'policy') {
+    body = <PolicyControl robotType={robotType} p={p} sim={sim} />;
   } else if (SIM_LEADS.includes(action)) {
     // the simulated robot is the leader: the input moves it, the real follower follows it
     body = (
@@ -328,6 +339,65 @@ function ControlFor({ robotType, status, p, sim, compact }) {
       {body}
       {sim.running && !SIM_LEADS.includes(action) && <Note>Twin mirrors the follower.</Note>}
       {!compact && !SIM_LEADS.includes(action) && <Compare compare={p.compare} />}
+    </div>
+  );
+}
+
+// a trained policy drives the follower (host rollout); the operator can take over with the
+// simulated leader and hand back - the rollout worker stays the one command owner. This page
+// keeps the rollout's heartbeat while it is open, so recording can run from here.
+function PolicyControl({ robotType, p, sim }) {
+  const dispatch = useDispatch();
+  const ro = p.rollout;
+  const [busy, setBusy] = useState(false);
+  const id = ro?.id;
+  useEffect(() => {
+    if (!id) return undefined;
+    const iv = setInterval(() => rolloutHeartbeat(id).catch(() => {}), 500);
+    return () => clearInterval(iv);
+  }, [id]);
+  if (!ro) return <Note>Load a policy on Inference → Host rollout.</Note>;
+  const act = async (fn) => {
+    setBusy(true);
+    try {
+      const st = await fn();
+      if (st && st.planning) dispatch(setHardwareStatus(st));
+    } catch (e) {
+      toast.error(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const running = ro.status === 'running';
+  const n = (ro.interventions || []).length + (ro.op_since ? 1 : 0);
+  return (
+    <div className="space-y-2" data-policy={ro.status} data-operator={ro.operator ? 'on' : 'off'}>
+      <div className="flex flex-wrap items-center gap-2 text-[12px]">
+        <StatusDot tone={running ? 'warn' : 'idle'} pulse={running} label={ro.operator ? 'Operator in control' : `Policy · ${ro.status}`} />
+        {n > 0 && <span className="chip num">{n} takeover{n === 1 ? '' : 's'}</span>}
+        <span className="flex-1" />
+        {ro.status === 'ready' || ro.status === 'paused' ? (
+          <button className="btn-primary btn-sm" disabled={busy} onClick={() => act(() => rolloutCommand(id, 'run'))} data-action="policy-run">
+            ▶ Run
+          </button>
+        ) : (
+          <button className="btn btn-sm" disabled={busy || !running} onClick={() => act(() => rolloutCommand(id, 'pause'))} data-action="policy-pause">
+            ❚❚ Pause
+          </button>
+        )}
+        {running && (
+          <button
+            className={ro.operator ? 'btn-primary btn-sm' : 'btn btn-sm'}
+            disabled={busy}
+            onClick={() => act(() => hwHybrid(robotType, !ro.operator))}
+            data-action="policy-takeover"
+          >
+            {ro.operator ? 'Hand back' : 'Take over'}
+          </button>
+        )}
+      </div>
+      {ro.workspace && <div className="text-[12px] text-signal-warn">Held: tool {ro.workspace}</div>}
+      {ro.operator && <SimControl robotType={robotType} sim={sim} action="gui" compact />}
     </div>
   );
 }

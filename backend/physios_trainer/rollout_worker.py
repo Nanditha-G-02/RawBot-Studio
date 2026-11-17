@@ -290,6 +290,35 @@ class Safety:
         return out, notes
 
 
+class Arbiter:
+    """Hybrid control: who commands now (the policy, or the operator who took over) and the
+    intervention log as wall-clock [start, end] pairs."""
+
+    def __init__(self, clock=None):
+        self.clock = clock or now
+        self.interventions = []
+        self.since = None
+
+    def update(self, took):
+        """'takeover' / 'handback' when the owner changes, else None."""
+        if took and self.since is None:
+            self.since = round(self.clock(), 3)
+            return 'takeover'
+        if not took and self.since is not None:
+            self.interventions.append([self.since, round(self.clock(), 3)])
+            self.since = None
+            return 'handback'
+        return None
+
+
+def operator_values(msg, names):
+    """The operator's joint values in action order from a JointState, or None."""
+    src = dict(zip(msg.get('name') or [], msg.get('position') or []))
+    if not all(n in src for n in names):
+        return None
+    return [float(src[n]) for n in names]
+
+
 def write_status(path, st):
     tmp = path + '.tmp'
     with open(tmp, 'w') as f:
@@ -399,6 +428,28 @@ def run(cfg_path):
         br.subscribe(topic, 'sensor_msgs/msg/CompressedImage')
     br.subscribe(cfg['state_topic'], 'sensor_msgs/msg/JointState')
     br.advertise(cfg['action_topic'], 'trajectory_msgs/msg/JointTrajectory')
+    # hybrid control: while the operator has taken over, the simulated leader's joints replace
+    # the policy output - through the same safety filter, by this one command owner
+    op_topic = cfg.get('operator_topic')
+    if op_topic:
+        br.subscribe(op_topic, 'sensor_msgs/msg/JointState')
+    arb = Arbiter()
+    # workspace limits on the commanded pose (hardware/kinematics.py), when the robot has a model
+    chain = ws = None
+    if cfg.get('kinematics'):
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        from hardware import kinematics as kin
+        chain = kin.Chain(cfg['kinematics']['joints'], cfg['kinematics'].get('names'))
+        ws = cfg['kinematics'].get('workspace')
+
+    def outside(vals):
+        return kin.check(ws, chain.fk(dict(zip(names, vals)))) if chain and ws else None
+
+    def operator_action():
+        hit = br.latest.get(op_topic) if op_topic else None
+        if not hit or now() - hit[0] > stale:
+            return None
+        return operator_values(hit[1], names)
 
     period = 1.0 / float(cfg['fps'])
     stale = float(cfg.get('stale_s', 0.5))
@@ -548,24 +599,56 @@ def run(cfg_path):
                 hold('maximum duration')
                 reason = 'Maximum duration (%.0f s) reached.' % max_dur
                 break
-            raw = predict_action(obs, policy, device, pre, post, use_amp=False,
-                                 task=cfg.get('task') or '', robot_type=cfg.get('robot_type')
-                                 or '')
-            raw = raw.squeeze(0).detach().cpu().numpy().tolist() if hasattr(raw, 'detach') \
-                else list(raw)
+            took = bool((ctl.get('takeover') or {}).get('on')) and bool(op_topic)
+            change = arb.update(took)          # wall clock: matched to the take later
+            if change == 'takeover':
+                print('[rollout] operator takes over', flush=True)
+            elif change == 'handback':
+                policy.reset()           # the policy continues from where the operator left
+                print('[rollout] back to the policy', flush=True)
+            if took:
+                raw = operator_action()
+                if raw is None:
+                    hold('operator input stale')
+                    push(operator=True, interventions=arb.interventions, op_since=arb.since,
+                         pause_reason='no fresh simulated leader')
+                    time.sleep(0.05)
+                    continue
+            else:
+                raw = predict_action(obs, policy, device, pre, post, use_amp=False,
+                                     task=cfg.get('task') or '',
+                                     robot_type=cfg.get('robot_type') or '')
+                raw = raw.squeeze(0).detach().cpu().numpy().tolist() \
+                    if hasattr(raw, 'detach') else list(raw)
             try:
                 safe, notes = safety.filter(raw, prev_cmd, last_state)
             except StopIteration as e:
+                if took:             # the operator's input is clamped, never ends the run
+                    hold('operator input outside the range')
+                    push(operator=True, pause_reason=str(e))
+                    time.sleep(0.05)
+                    continue
                 hold('unsafe action')
                 reason = 'Stopped: %s.' % e
                 exit_code = 1
                 break
+            why = outside(safe)
+            if why and not outside(last_state):
+                hold('workspace')
+                notes.append('workspace: %s' % why)
+                push(last={'raw': raw, 'safe': safe, 'state': last_state, 'notes': notes},
+                     workspace=why, operator=took)
+                time.sleep(max(0.0, period - (now() - tick)))
+                continue
+            held = False
             br.publish(cfg['action_topic'], traj_msg(names, safe))
             prev_cmd = safe
             status['step'] += 1
             rate.append(now())
             rate[:] = [x for x in rate if rate[-1] - x < 2.0]
             push(last={'raw': raw, 'safe': safe, 'state': last_state, 'notes': notes},
+                 operator=took, interventions=arb.interventions, op_since=arb.since,
+                 workspace=None,
                  clamps=safety.counts, elapsed_s=round(now() - run_started, 2),
                  rate_hz=round((len(rate) - 1) / max(1e-3, rate[-1] - rate[0]), 1)
                  if len(rate) > 1 else None)
@@ -576,6 +659,9 @@ def run(cfg_path):
         hold('error')
         reason = 'Rollout error: %s: %s' % (type(e).__name__, e)
         exit_code = 1
+    if 'arb' in locals():
+        arb.update(False)                  # an open takeover ends with the run
+        push(interventions=arb.interventions, op_since=None, operator=False)
     push(phase='finished' if exit_code == 0 else 'failed', end_reason=reason,
          error=reason if exit_code else None, finished_at=time.strftime('%Y-%m-%dT%H:%M:%S'),
          clamps=safety.counts)

@@ -32,6 +32,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from rollout_worker import Bridge, read_control, traj_msg, write_status  # noqa: E402
+from hardware import kinematics as kin  # noqa: E402
 
 
 def now():
@@ -80,6 +81,13 @@ def run(cfg_path):
         return 2
     br.subscribe(cfg['state_topic'], 'sensor_msgs/msg/JointState')
     follow = cfg.get('follow') or None
+    kc = cfg.get('kinematics') or None
+    chain = kin.Chain(kc['joints'], kc.get('names')) if kc else None
+    ws = (kc or {}).get('workspace')
+
+    def outside(pos):
+        """Workspace reason for a commanded pose, or None (no model: no check)."""
+        return kin.check(ws, chain.fk(pos)) if chain and ws else None
     if follow:
         br.subscribe(follow['topic'], 'sensor_msgs/msg/JointState')
         fmap = {n: (follow.get('map') or {}).get(n, n) for n in names}
@@ -196,6 +204,7 @@ def run(cfg_path):
                     continue
                 if target is None:
                     target = dict(m)
+                prev = dict(target)
                 limited = []
                 for n in names:
                     lo, hi = float(lim[n]['min']), float(lim[n]['max'])
@@ -206,6 +215,10 @@ def run(cfg_path):
                     nxt = target[n] + step
                     if abs(nxt - m[n]) <= lead[n]:
                         target[n] = nxt
+                why = outside(target)
+                if why and not outside(prev):
+                    target = prev            # this step would leave the workspace: hold
+                    push(held_reason='workspace: %s' % why, limited=list(names))
                 lagging = [n for n in names if abs(target[n] - m[n]) > lead[n]]
                 if lagging:
                     lag_since = lag_since or tick
@@ -218,7 +231,8 @@ def run(cfg_path):
                     lag_since = None
                 publish(target)
                 push(phase='moving', moving='all', following=True, at_limit=limited[0] if
-                     limited else None, limited=limited, measured=m, target=dict(target))
+                     limited else None, limited=limited, measured=m, target=dict(target),
+                     held_reason=('workspace: %s' % why) if why else None)
                 time.sleep(max(0.0, period - (now() - tick)))
                 continue
             mv = ctl.get('move') or {}
@@ -238,6 +252,12 @@ def run(cfg_path):
                 else:
                     nxt = min(hi, max(lo, nxt)) if lo <= target[want] <= hi else nxt
                     lag = abs(nxt - m[want])
+                    why = outside(dict(target, **{want: nxt}))
+                    if why and not outside(target):
+                        push(phase='moving', moving=want, at_limit=want,
+                             held_reason='workspace: %s' % why)
+                        time.sleep(max(0.0, period - (now() - tick)))
+                        continue
                     if lag <= lead[want]:
                         target[want] = nxt
                         lag_since = None

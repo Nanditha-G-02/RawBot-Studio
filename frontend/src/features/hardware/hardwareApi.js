@@ -33,6 +33,9 @@ export const hwActionSource = (rt, supported, source) => post('action-source', r
 // the simulated robot (hardware/simbot.py) and the Planning choices (hardware/planning.py)
 export const hwSim = (rt, body) => post('sim', rt, body, 6000);
 export const hwPlanning = (rt, body) => post('setup', rt, body);
+export const hwHybrid = (rt, on) => post('hybrid', rt, { on }, 8000);
+export const rolloutCommand = (id, command) => trainerFetch(`/rollouts/${id}/command`, { method: 'POST', body: { command }, timeoutMs: 8000 });
+export const rolloutHeartbeat = (id) => trainerFetch(`/rollouts/${id}/heartbeat`, { method: 'POST', body: {}, timeoutMs: 3000 });
 
 export const calStart = (rt, role, mode = 'calibrate', profileId) =>
   post('calibration', rt, { role, mode, profile_id: profileId }, 30000);

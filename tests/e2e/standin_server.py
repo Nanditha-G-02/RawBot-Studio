@@ -69,6 +69,7 @@ class Robot:
         self.commands_file = Path(os.environ.get('STANDIN_COMMANDS_FILE', '/tmp/standin_commands.jsonl'))
         self.teleop = os.environ.get('STANDIN_TELEOP', '1') == '1'
         self.follower_on = os.environ.get('STANDIN_FOLLOWER', '1') == '1'
+        self.cameras_on = os.environ.get('STANDIN_CAMERAS', '1') == '1'
         self.action_source = 'leader'
 
     def params(self):
@@ -205,7 +206,8 @@ class Robot:
                                            and self.robot_type) else []
             # like ROS: the cameras and bridge.py's follower state have their own nodes
             own = []
-            if topic.startswith(('/camera', '/gripper_camera')) and self.robot_type:
+            if topic.startswith(('/camera', '/gripper_camera')) and self.robot_type \
+                    and self.cameras_on:
                 own = ['/camera_node']
             elif topic == '/joint_states' and self.follower_on and self.robot_type:
                 own = ['/so101_bridge']
@@ -215,6 +217,8 @@ class Robot:
             self.teleop = bool(args.get('enabled'))
             if 'follower' in args:
                 self.follower_on = bool(args.get('follower'))
+            if 'cameras' in args:
+                self.cameras_on = bool(args.get('cameras'))
             return {'success': True, 'message': 'teleop %s' % ('on' if self.teleop else 'off')}
         if name == '/physical_ai_server/set_parameters':
             res = []
@@ -336,7 +340,7 @@ class Robot:
                                                                       'nanosec': 0}}]})
                 # cameras over rosbridge (CompressedImage) for subscribers, 320x240 like
                 # the stand-in recorder's videos, ~10 Hz
-                if int(t * 20) % 2 == 0:
+                if int(t * 20) % 2 == 0 and self.cameras_on:
                     for topic in ('/camera/color/image_raw/compressed',
                                   '/gripper_camera/color/image_raw/compressed'):
                         if any(topic in tp for tp in self.subs.values()):

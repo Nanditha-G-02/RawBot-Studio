@@ -33,9 +33,14 @@ class FakeRos:
         self.topics = {}
         self.unknown = set()    # topics whose publishers rosapi cannot tell
 
-    def watch(self, topics, publishers_of=()):
+    def watch(self, topics, publishers_of=(), frames=()):
         self.topics = dict(topics)
         self.pub_topics = set(t for t in publishers_of if t)
+        self.frame_topics = set(t for t in frames if t)
+
+    def age(self, topic):
+        hit = self.msgs.get(topic)
+        return time.time() - hit[0] if hit else None
 
     def publish(self, topic, names, values, publisher='/so101_bridge'):
         self.msgs[topic] = (time.time(), list(names), list(values))

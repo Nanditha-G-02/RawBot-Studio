@@ -35,7 +35,8 @@ def token_for(cfg):
                                     'action_topic', 'action_names', 'fps', 'task',
                                     'rename_map', 'limits', 'speed_factor', 'max_duration_s',
                                     'device', 'rosbridge_url',
-                                    'allow_unverified_publishers')}
+                                    'allow_unverified_publishers', 'kinematics',
+                                    'operator_topic')}
     return hashlib.sha256(json.dumps(keep, sort_keys=True).encode()).hexdigest()[:24]
 
 
@@ -239,6 +240,19 @@ class Rollouts:
                 self.log('rollout %s: worker killed after emergency stop' % rid)
             except OSError:
                 pass
+
+    def takeover(self, rid, on):
+        """Hybrid control: the operator's simulated leader replaces the policy output (the
+        worker keeps every safety filter) until handed back."""
+        r = self.load(rid)
+        if r['status'] not in ('running', 'paused'):
+            raise ValueError('The policy is not running.')
+        self._control(rid, takeover={'on': bool(on), 't': time.time()})
+        with self.lock:
+            rec = read_json(self._path(rid) / 'rollout.json')
+            rec['events'].append({'t': now_iso(), 'event': 'takeover' if on else 'handback'})
+            self._save(rec)
+        return self.load(rid)
 
     def heartbeat(self, rid):
         r = read_json(self._path(rid) / 'rollout.json')

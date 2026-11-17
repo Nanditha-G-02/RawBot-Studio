@@ -370,3 +370,30 @@ def test_dataset_meta_keeps_how_each_episode_was_recorded(env):
     robot = _json.loads((meta / 'rawbot_robot.json').read_text())
     assert robot['format'] == 'rawbot-studio/robot/v1'
     assert (meta / 'info.json').exists()
+
+
+
+def test_hybrid_take_is_annotated(env):
+    """Operator takeovers during a policy take are kept as seconds from the take start."""
+    import datetime
+    import json as _json
+    svc, _, tmp = env
+    plan = approved_plan(svc, n=2)
+    record_one(svc, tmp, plan, 'E001', setup={'config': 'follower_only', 'action': 'policy',
+                                            'target': 'follower', 'action_param': 'leader'})
+    att = svc.handle('record.state', {'plan_id': plan['id']})['progress']['episodes'][
+        'E001']['attempts'][-1]
+    t0 = datetime.datetime.fromisoformat(att['started_at']).timestamp()
+    res = svc.handle('record.annotate', {'plan_id': plan['id'], 'episode_id': 'E001',
+                                         'interventions': [[t0 + 0.5, t0 + 1.5],
+                                                           [t0 - 999, t0 - 900]]})
+    assert res['annotations']['source'] == 'hybrid'
+    t1 = datetime.datetime.fromisoformat(att['ended_at']).timestamp()
+    end = round(min(t0 + 1.5, t1 + 1) - t0, 2)
+    assert res['annotations']['interventions_s'] == [[0.5, end]]
+    ds = svc.handle('record.state', {'plan_id': plan['id']})['progress']['dataset_id']
+    lines = (svc.dataset_root / ds / 'meta' / 'rawbot_recordings.jsonl').read_text().splitlines()
+    assert _json.loads(lines[-1])['annotations']['operator_s'] == round(end - 0.5, 2)
+    with pytest.raises(Exception):
+        svc.handle('record.annotate', {'plan_id': plan['id'], 'episode_id': 'E002',
+                                       'interventions': []})

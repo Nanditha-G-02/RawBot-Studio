@@ -2,6 +2,16 @@
 
 ## 2.0.0, renamed (2026-11-13)
 
+* **Kinematics and workspace limits.** Forward / inverse kinematics from a custom robot's URDF
+  (or the approximate SO-101 chain); a tool pad for the simulated robot; steps that would take the
+  tool into the table, off the table area, near the base or into keep-outs are held in the
+  simulated robot, follow mode and host rollout.
+* **Simulated cameras.** A configured camera without a real publisher is rendered from the
+  simulated robot by the page and published on its topic; live only while frames arrive.
+* **Policy and Human + AI recording.** Source *Policy* records a running host rollout; *Take over*
+  / *Hand back* switch the rollout worker between the policy and the operator (one command owner,
+  same safety filter). Takeovers are stored with the take and in the dataset metadata.
+
 * **Simulated leader → physical follower.** GUI, keys, pad, script or replay move the simulated
   robot and the physical follower follows it (direct-control follow mode: reviewed limits and
   speed, line-up before moving, stale / page / publisher holds, *Stop all*); recorded like

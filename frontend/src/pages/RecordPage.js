@@ -93,7 +93,7 @@ export default function RecordPage({ isActive = true }) {
   const handGuided = planSetup ? planSetup.selection.action === 'hand_guided' : hw?.mode === 'follower_only';
   // the operator drives something from this page (simulated robot, or direct control of the
   // follower): show its control above the side panel
-  const showControl = !!planSetup && (planSetup.selection.target === 'sim' || ['gui', 'keyboard', 'gamepad', 'script', 'replay'].includes(planSetup.selection.action));
+  const showControl = !!planSetup && (planSetup.selection.target === 'sim' || ['gui', 'keyboard', 'gamepad', 'script', 'replay', 'policy'].includes(planSetup.selection.action));
   const counts = rec.state?.counts;
   const [camOpen, setCamOpen] = useState(false);
   const camCheck = useSelector((s) => s.planning.cameraCheck);

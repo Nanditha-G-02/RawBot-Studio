@@ -20,6 +20,7 @@ from collections import deque
 import json
 import math
 import os
+import re
 from pathlib import Path
 import shutil
 import signal
@@ -31,6 +32,7 @@ import time
 import uuid
 
 from physios_trainer.hardware import capabilities as capmod
+from physios_trainer.hardware import kinematics as kinmod
 from physios_trainer.hardware import planning as planmod
 from physios_trainer.hardware import ports as portmod
 from physios_trainer.hardware import robotcaps
@@ -86,10 +88,12 @@ class RosWatch:
         self._stop = False
         threading.Thread(target=self._loop, daemon=True).start()
 
-    def watch(self, topics, publishers_of=()):
+    def watch(self, topics, publishers_of=(), frames=()):
+        """frames: camera topics whose frame age is watched (1 frame/s is enough)."""
         with self.lock:
             self.topics = dict(topics)
             self.pub_topics = {t for t in publishers_of if t}
+            self.frame_topics = {t for t in frames if t}
 
     def _loop(self):
         from physios_trainer.rollout_worker import Bridge
@@ -98,7 +102,8 @@ class RosWatch:
             with self.lock:
                 topics = dict(self.topics)
                 pub_only = set(self.pub_topics) - set(topics)
-            if not topics and not pub_only:
+                frames = set(getattr(self, 'frame_topics', ())) - set(topics)
+            if not topics and not pub_only and not frames:
                 time.sleep(0.5)
                 continue
             if self.br is None or not self.br.alive:
@@ -117,6 +122,10 @@ class RosWatch:
                 for t, typ in topics.items():
                     if t not in self._subscribed:
                         self.br.subscribe(t, typ, throttle_ms=100)
+                        self._subscribed.add(t)
+                for t in frames:
+                    if t not in self._subscribed:
+                        self.br.subscribe(t, 'sensor_msgs/msg/CompressedImage', throttle_ms=1000)
                         self._subscribed.add(t)
                 if time.time() - last_pub > 2.5:
                     last_pub = time.time()
@@ -146,6 +155,12 @@ class RosWatch:
             return time.time() - t, list(msg.get('joint_names') or []), list(
                 (pts[0] or {}).get('positions') or [])
         return time.time() - t, list(msg.get('name') or []), list(msg.get('position') or [])
+
+    def age(self, topic):
+        """Seconds since the last message on a watched topic, or None."""
+        br = self.br
+        hit = br.latest.get(topic) if br else None
+        return time.time() - hit[0] if hit else None
 
     def foreign_publishers(self, topic):
         """None when unknown (rosapi not reachable), else publishers other than rosbridge."""
@@ -358,9 +373,19 @@ class Hardware:
     # ---- setup ------------------------------------------------------------------------
     def setup(self, robot_type, mode=None, topics=None, env=None, source='operator',
               cameras=None, joints=None, sim_twin=None, selection=None, joint_map=None,
-              joint_pairs=None):
+              joint_pairs=None, workspace=None, workspace_guard=None, sim_cameras=None):
         cur = self.reg.setup(robot_type)
         kw = {}
+        if sim_cameras is not None:
+            kw['sim_cameras'] = bool(sim_cameras)
+        if isinstance(workspace, dict):
+            num = {k: float(v) for k, v in workspace.items() if isinstance(v, (int, float))
+                   and k.endswith('_mm')}
+            num['keepouts'] = [k for k in workspace.get('keepouts') or []
+                               if isinstance(k, dict)][:20]
+            kw['workspace'] = num
+        if workspace_guard is not None:
+            kw['workspace_guard'] = bool(workspace_guard)
         if joint_map is not None:
             kw['joint_map'] = clean_joint_map(joint_map)
         if joint_pairs is not None:
@@ -665,7 +690,8 @@ class Hardware:
                          'sensor_msgs/msg/JointState')
         cams = setup.get('cameras') or {}
         self.ros.watch(topics if setup['mode'] != 'simulation' else {},
-                       publishers_of=[setup['topics'].get('follower')] + list(cams.values()))
+                       publishers_of=[setup['topics'].get('follower')] + list(cams.values()),
+                       frames=list(cams.values()) if self.sim.running else ())
         ps = self.refresh_ports()
         regs = self.reg.devices()
         arms = {r: self._arm(robot_type, r, setup, ps) for r in ROLES}
@@ -728,7 +754,8 @@ class Hardware:
         ft = setup['topics'].get('follower')
         sel = setup.get('selection') or {}
         run = mode in ('simulation', 'leader_sim') or bool(setup.get('sim_twin')) or (
-            sel.get('target') == 'follower' and sel.get('action') in planmod.SIM_LEADS)
+            sel.get('target') == 'follower' and sel.get('action') in planmod.SIM_LEADS +
+            ('policy',))
         own_reason = ''
         if not ft:
             own_reason = 'The follower state topic of the robot configuration is not known yet.'
@@ -758,9 +785,13 @@ class Hardware:
                     break
         # what this robot is (joints, gripper, limits, controls): from a registered custom
         # robot's URDF, else the robot configuration's joint order
+        custom = robotcaps.custom_profile(self.robots_dir, robot_type)
         rc = robotcaps.capabilities(
-            robot_type, names, robotcaps.custom_profile(self.robots_dir, robot_type),
+            robot_type, names, custom,
             serial=bool(motor_spec(robot_type)), topics=setup['topics'])
+        model, ws = self._kinematics(robot_type, setup, custom)
+        rc['kinematics'] = bool(model)
+        rc['workspace_guard'] = bool(model and ws)
         rc['joint_pairs'] = setup.get('joint_pairs') or {}
         # the leader read by RawBot Studio itself (serial session): converted to radians and
         # published for the recorder; with bridge.py the leader topic is used as before
@@ -771,7 +802,8 @@ class Hardware:
                         names=rc['names'] or names,
                         state_topic=ft if (run and not own_reason) else None,
                         leader_sampler=sampler, leader_pub=serial_leader,
-                        limits=rc['limits'], pairs=setup.get('joint_pairs') or {})
+                        limits=rc['limits'], pairs=setup.get('joint_pairs') or {},
+                        kinematics={'model': model, 'workspace': ws})
         sim = self.sim.view()
         sim.update(can_own_state=not own_reason, own_reason=own_reason, twin=bool(
             setup.get('sim_twin')), joint_map=setup.get('joint_map') or {})
@@ -782,11 +814,28 @@ class Hardware:
         cams = [{'name': k, 'topic': t, 'live': (None if self.ros.foreign_publishers(t) is None
                                                   else bool(self.ros.foreign_publishers(t)))}
                 for k, t in sorted((setup.get('cameras') or {}).items())]
+        # simulated cameras: when the simulated robot is the recorded robot, a configured
+        # camera that no real node publishes is rendered from the simulation by a RawBot
+        # Studio page (sim/SimCameraPublisher.js). Live only once its frames arrive.
+        sim_cams = []
+        if model and sim['running'] and sim.get('state_topic') and \
+                setup.get('sim_cameras') is not False:
+            for c in cams:
+                if c['live'] is False:
+                    age = self.ros.age(c['topic'])
+                    c.update(sim=True, live=age is not None and age < 2.5)
+                    sim_cams.append({'name': c['name'], 'topic': c['topic'], 'view': 'wrist' if
+                                     re.search(r'wrist|grip|hand|tool', c['name'], re.I)
+                                     else 'scene'})
+        if model:
+            sim['chain'] = {'joints': model.chain, 'names': model.joint_of}
         out = planmod.options(mode, arms, caps, sim, setup.get('selection'), cams, {
             'jog_running': extra.get('jog_active'), 'compare': compare,
             'calibration_active': extra.get('calibration_active'),
             'follower_relay': extra.get('follower_relay'),
             'pairs': setup.get('joint_pairs') or {},
+            'rollout': _rollout_view(self.rollouts.active() if self.rollouts else None),
+            'jog_held': (self._jog_view() or {}).get('held_reason'),
             'leader_state_supported': self.action_source_supported.get(
                 (robot_type, 'leader_state'))}, robot=rc, auto=auto)
         # what drives the simulated robot follows the selection: the leader arm, a mirror of
@@ -805,7 +854,20 @@ class Hardware:
                     pass
                 sim = dict(sim, **self.sim.view())
         out['sim'] = sim
+        out['sim_cameras'] = sim_cams
         return out
+
+    def _kinematics(self, robot_type, setup, custom=None):
+        """(model, workspace limits) of the robot: its URDF or the SO-101 chain, and the
+        planning workspace (floor only until the robot configuration sent one). The guard can
+        be switched off per robot (``workspace_guard``)."""
+        if custom is None:
+            custom = robotcaps.custom_profile(self.robots_dir, robot_type)
+        model = kinmod.model_for(robot_type, (custom or {}).get('urdf_joints'),
+                                 (custom or {}).get('urdf_to_ros'), bool(motor_spec(robot_type)))
+        if not model or setup.get('workspace_guard') is False:
+            return model, None
+        return model, kinmod.workspace_from_profile(setup.get('workspace') or {})
 
     def _update_relay(self, robot_type, setup, arms):
         """Publish the follower's joint states from the read-only serial session when the
@@ -844,6 +906,34 @@ class Hardware:
                     {'source': 'serial', 'ticks': [int(pos[n]) for n in names],
                      'rate_hz': mon.get('rate_hz')})
         return sample
+
+    def hybrid(self, robot_type, on):
+        """Hybrid control: the operator takes over from the running policy (the simulated
+        leader, lined up with the arm first, drives it through the rollout's own safety filter)
+        or hands back. One command owner - the rollout worker - throughout."""
+        r = self.rollouts.active() if self.rollouts else None
+        if not r:
+            raise HardwareError('No policy is running.', 409)
+        setup = self.reg.setup(robot_type)
+        if on:
+            if not self.sim.running:
+                raise HardwareError('The simulated leader is not running.', 409)
+            age, fnames, fvals = self.ros.sample(setup['topics'].get('follower'))
+            if age is None or age > 1.0:
+                raise HardwareError('No fresh follower joint states.', 409)
+            self.sim.command({'command': 'set_pose', 'pose': dict(zip(fnames, fvals))})
+        try:
+            self.rollouts.takeover(r['id'], on)
+        except ValueError as e:
+            raise HardwareError(str(e), 409)
+        if not on and self.sim.running:
+            try:
+                self.sim.command({'command': 'drive', 'drive': 'follower'})
+            except ValueError:
+                pass
+        self._event(robot_type, 'hybrid', 'Operator took over from the policy.' if on else
+                    'Control handed back to the policy.', notify=False)
+        return self.status(robot_type)
 
     def sim_command(self, robot_type, body):
         if robot_type and robot_type != self.sim.robot_type:
@@ -1316,6 +1406,9 @@ class Hardware:
                'command_topic': setup['topics'].get('leader'), 'names': names,
                'limits': limits, 'rosbridge_url': self.ros.url,
                'max_duration_s': 900, 'rate_hz': 30}
+        model, ws = self._kinematics(robot_type, setup)
+        if model and ws:
+            cfg['kinematics'] = {'joints': model.chain, 'names': model.joint_of, 'workspace': ws}
         if req.get('follow'):
             # virtual teleoperation: the physical follower follows the simulated leader
             sv = self.sim.view()
@@ -1556,6 +1649,16 @@ def clean_joint_map(jm):
             raise HardwareError('%s: the offset must be within one turn.' % name)
         out[str(name)[:60]] = {'sign': -1 if m.get('sign') == -1 else 1, 'offset': off}
     return out
+
+
+def _rollout_view(r):
+    if not r:
+        return None
+    live = r.get('live') or {}
+    return {'id': r.get('id'), 'status': r.get('status'), 'operator': bool(live.get('operator')),
+            'interventions': live.get('interventions') or [], 'op_since': live.get('op_since'),
+            'workspace': live.get('workspace'), 'step': live.get('step'),
+            'pause_reason': live.get('pause_reason')}
 
 
 def _bridge(url):

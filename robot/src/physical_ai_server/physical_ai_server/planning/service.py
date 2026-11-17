@@ -671,6 +671,39 @@ class PlanningService:
                                  retake=bool(retake))
             return {'task_info': task_info, 'episode': ep, 'dataset_id': ds_id}
 
+    def cmd_record_annotate(self, plan_id, episode_id, interventions=None):
+        """Hybrid recording: when the operator took over from the policy during the latest
+        saved take of this episode (wall-clock [start, end] pairs from RawBot Studio). Kept with
+        the attempt and appended to the dataset's meta/rawbot_recordings.jsonl, in seconds from
+        the start of the take (record.begin; the recorder's warm-up is not subtracted)."""
+        import datetime
+        with self.store.lock:
+            prog = self.store.load_progress(plan_id) or {}
+            e = (prog.get('episodes') or {}).get(episode_id)
+            att = next((a for a in reversed((e or {}).get('attempts') or [])
+                        if a.get('result') == 'saved'), None)
+            if not att:
+                raise CommandError('No saved take of %s.' % episode_id)
+            t0 = datetime.datetime.fromisoformat(att['started_at']).timestamp()
+            t1 = datetime.datetime.fromisoformat(att['ended_at']).timestamp()
+            spans = []
+            for iv in interventions or []:
+                try:
+                    a0, a1 = float(iv[0]), float(iv[1] if iv[1] is not None else t1)
+                except (TypeError, ValueError, IndexError):
+                    continue
+                if a1 > t0 - 1 and a0 < t1 + 1:       # whole seconds: ISO times are rounded
+                    end = min(t1 + 1, a1)          # + 1 s: the stored times are whole seconds
+                    spans.append([round(max(0.0, a0 - t0), 2), round(max(0.0, end - t0), 2)])
+            ann = {'source': 'hybrid' if spans else 'policy', 'interventions_s': spans,
+                   'operator_s': round(sum(b - a for a, b in spans), 2)}
+            att['annotations'] = ann
+            self.store.save_progress(plan_id, prog)
+        self._export_recording(prog.get('dataset_id'), {
+            'episode_index': att.get('dataset_episode_index'), 'plan_id': plan_id,
+            'episode_id': episode_id, 'annotations': ann})
+        return {'annotations': ann}
+
     def cmd_record_cancel(self, plan_id, reason='cancelled'):
         with self.store.lock:
             prog = self.store.load_progress(plan_id) or {}

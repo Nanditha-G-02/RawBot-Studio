@@ -463,6 +463,46 @@ with sync_playwright() as p:
     expect(page.locator('[data-follow]')).to_have_count(0, timeout=15000)
     pick(page, 'action', 'hand_guided')
 
+    # --------------------------- P8 simulated cameras + tool-space control (sim only)
+    step('P8 Simulation Only without cameras: simulated cameras, tool pad, workspace hold')
+    teleop(False, follower=False)
+    release('follower')
+    rosbridge('/standin/set_teleop', {'enabled': False, 'follower': False, 'cameras': False})
+    mode(page, 'simulation')
+    panel(page)
+    pick(page, 'action', 'gui')
+    selection(page, 'gui|sim|sim')
+    wait_for(lambda: len(status()['planning'].get('sim_cameras') or []) == 2, 20, 'sim cameras listed')
+    views = {c['name']: c['view'] for c in status()['planning']['sim_cameras']}
+    assert views == {'global': 'scene', 'gripper': 'wrist'}, views
+    # this page renders and publishes them; they are live only once frames arrive
+    for cam in ('global', 'gripper'):
+        expect(page.locator(f'[data-plan-camera="{cam}"]')).to_have_attribute('data-camera-sim', 'yes', timeout=15000)
+        expect(page.locator(f'[data-plan-camera="{cam}"]')).to_have_attribute('data-camera-live', 'yes', timeout=20000)
+    record(page, True)
+    expect(page.locator('[data-tool-pad]')).to_be_visible(timeout=10000)
+    page.locator('[data-action="sim-home"]').click()
+    page.wait_for_timeout(1500)
+    z0 = status()['sim']['tool_mm'][2]
+    page.locator('[data-tool="z+"]').click()
+    page.locator('[data-tool="z+"]').click()
+    wait_for(lambda: status()['sim']['tool_mm'][2] > z0 + 12, 10, 'tool pad lifts the tool')
+    shot(page, 'pl18_sim_cameras_tool')
+    # a pose through the table is held, with the reason shown
+    urllib.request.urlopen(urllib.request.Request(
+        'http://127.0.0.1:8766/hardware/sim?robot_type=' + RT,
+        data=json.dumps({'command': 'targets', 'targets': {'shoulder_lift': 1.2, 'elbow_flex': 1.2}}).encode(),
+        headers={'Content-Type': 'application/json'}), timeout=10)
+    expect(page.locator('[data-sim-blocked]')).to_be_visible(timeout=10000)
+    assert status()['sim']['tool_mm'][2] >= -1, status()['sim']['tool_mm']
+    page.locator('[data-theme-option="dark"]').click()
+    shot(page, 'pl19_sim_cameras_dark')
+    page.locator('[data-theme-option="light"]').click()
+    page.locator('[data-action="sim-home"]').click()
+    rosbridge('/standin/set_teleop', {'enabled': False, 'follower': False, 'cameras': True})
+    for cam in ('global', 'gripper'):
+        expect(page.locator(f'[data-plan-camera="{cam}"]')).not_to_have_attribute('data-camera-sim', 'yes', timeout=20000)
+
     # ------------------------------------------------------------------ restore
     world.hold('ttyACM0')
     world.hold('ttyACM1')

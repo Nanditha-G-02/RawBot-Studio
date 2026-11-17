@@ -60,7 +60,10 @@ def custom_profile(robots_dir, robot_type):
             joints.append({'name': r.get('ros_joint') or r.get('urdf_joint'),
                            'urdf': r.get('urdf_joint'), 'type': u.get('type') or 'revolute',
                            'lower': lo, 'upper': hi})
-        out = {'source': 'custom robot %s' % p.get('name', p.get('id')), 'joints': joints}
+        out = {'source': 'custom robot %s' % p.get('name', p.get('id')), 'joints': joints,
+               'urdf_joints': summary.get('joint_list') or [],
+               'urdf_to_ros': {r.get('urdf_joint'): r.get('ros_joint') or r.get('urdf_joint')
+                               for r in rows}}
         break
     _CACHE[(str(robots_dir), robot_type)] = (time.time(), out)
     return out

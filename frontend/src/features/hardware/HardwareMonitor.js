@@ -87,12 +87,14 @@ export default function HardwareMonitor() {
         const topics = topicsFromParams(res.params);
         const cameras = camerasFromParams(res.params);
         const joints = jointsFromParams(res.params);
-        const key = `${robotType}|${JSON.stringify([topics, cameras, joints])}`;
+        // the planning workspace of the robot profile: workspace limits of the motion guards
+        const workspace = res.workspace || null;
+        const key = `${robotType}|${JSON.stringify([topics, cameras, joints, workspace])}`;
         if (!Object.keys(topics).length) return;
         if (topicsSent.current === key && JSON.stringify(topics) === JSON.stringify(status.topics || {})) return;
         topicsSent.current = key;
         // cameras and joint names: for the Planning choices and the simulated robot
-        hwSetup(robotType, { topics, cameras, joints }).then((st) => dispatch(setHardwareStatus(st))).catch(() => {});
+        hwSetup(robotType, { topics, cameras, joints, ...(workspace ? { workspace } : {}) }).then((st) => dispatch(setHardwareStatus(st))).catch(() => {});
       })
       .catch(() => {});
     return () => {

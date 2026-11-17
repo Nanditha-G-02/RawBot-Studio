@@ -44,6 +44,7 @@ ACTIONS = [
     ('gamepad', 'Gamepad'),
     ('script', 'Scripted movement'),
     ('replay', 'Trajectory replay'),
+    ('policy', 'Trained policy'),
 ]
 TARGETS = [('follower', 'Physical follower'), ('sim', 'Simulated robot')]
 OBSERVATIONS = [('follower', 'Follower joint states'), ('sim', 'Simulated joint states')]
@@ -107,6 +108,16 @@ def options(mode, arms, caps, sim, selection=None, cameras=None, extra=None, rob
             return (c['reason'], c['short'])
         if target == 'sim' and not robot['sim']['available']:
             return (robot['sim']['reason'], robot['sim']['short'])
+        if action == 'policy':
+            if target == 'sim':
+                return ('A policy runs on the physical follower.', 'physical only')
+            if 'follower' not in used:
+                return arm_reason('follower', 'A policy')
+            ro = extra.get('rollout')
+            if not ro:
+                return ('Load a policy and press Start: Inference \u2192 Host rollout.',
+                        'no policy running')
+            return None if fr else arm_reason('follower', 'A policy')
         if target == 'sim':
             if not sim_on:
                 return sim_reason
@@ -198,6 +209,9 @@ def options(mode, arms, caps, sim, selection=None, cameras=None, extra=None, rob
     if not reason and tg == 'follower' and a == 'leader':
         c = caps.get('record') or {}
         reason = '' if c.get('available') else c.get('reason') or 'Recording is not available.'
+    ro = extra.get('rollout') or {}
+    if not reason and a == 'policy' and ro.get('status') not in ('running', 'paused'):
+        reason = 'Start the policy first (Inference \u2192 Host rollout).'
     if not reason and tg == 'follower' and a in SIM_LEADS and not extra.get('jog_running'):
         reason = 'Start following first: the arm follows the simulated leader.'
     if not reason and ob == 'sim' and not sim.get('state_topic'):
@@ -206,8 +220,11 @@ def options(mode, arms, caps, sim, selection=None, cameras=None, extra=None, rob
         reason = 'A calibration is in progress (motor torque is off).'
     missing = [c for c in (cameras or []) if c.get('live') is False]
     if not reason and missing:
-        reason = ('Camera %s is not publishing (%s). Recording needs every camera of the robot '
-                  'configuration.' % (missing[0]['name'], missing[0]['topic']))
+        c = missing[0]
+        reason = ('Simulated camera %s is starting (needs a RawBot Studio page open).' % c['name']
+                  if c.get('sim') else
+                  'Camera %s is not publishing (%s). Recording needs every camera of the robot '
+                  'configuration.' % (c['name'], c['topic']))
     action_param = 'follower' if (a == 'hand_guided' or (tg == 'sim' and a != 'leader')) \
         else 'leader'
     if a == 'leader' and tg == 'sim' and not lr and ls:
@@ -276,10 +293,26 @@ def options(mode, arms, caps, sim, selection=None, cameras=None, extra=None, rob
             checks.append(check('limits', 'Limits', not li.get('at_limit'),
                                 'at limit: %s' % ', '.join(li['at_limit']) if li.get('at_limit')
                                 else 'within limits', warn=True))
+    if robot.get('workspace_guard'):
+        held = (sim.get('blocked') if tg == 'sim' else
+                (extra.get('jog_held') or '').replace('workspace: ', '')
+                if (extra.get('jog_held') or '').startswith('workspace') else
+                ro.get('workspace') if a == 'policy' else None)
+        checks.append(check('workspace', 'Workspace', not held,
+                            'held: tool %s' % held if held else 'table, base and keep-outs',
+                            warn=True))
+    if a == 'policy':
+        checks.append(check('policy', 'Policy', ro.get('status') in ('running', 'paused'),
+                            '%s%s' % (ro.get('status') or 'not running',
+                                      ' \u00b7 operator' if ro.get('operator') else '')))
     if cameras:
         live = [c for c in cameras if c.get('live') is not False]
-        checks.append(check('cameras', 'Cameras %d/%d' % (len(live), len(cameras)),
-                            len(live) == len(cameras), ', '.join(c['name'] for c in cameras)))
+        nsim = sum(1 for c in cameras if c.get('sim'))
+        checks.append(check('cameras', 'Cameras %d/%d%s' % (len(live), len(cameras),
+                                                          ' \u00b7 %d sim' % nsim if nsim else ''),
+                            len(live) == len(cameras), ', '.join(
+                                c['name'] + (' (simulated)' if c.get('sim') else '')
+                                for c in cameras)))
     if action_param == 'leader_state':
         checks.append(check('runtime', 'Runtime', extra.get('leader_state_supported') is not
                             False, 'robot image supports leader_state'
@@ -291,7 +324,7 @@ def options(mode, arms, caps, sim, selection=None, cameras=None, extra=None, rob
         config = 'sim_leader'        # the simulated robot leads the physical follower
     return {
         'config': config, 'config_label': CONFIGS[config], 'auto': bool(auto), 'robot': robot,
-        'checks': checks, 'robots': robots,
+        'checks': checks, 'robots': robots, 'rollout': ro or None,
         'action_sources': actions, 'targets': targets, 'observations': observations,
         'cameras': list(cameras or []), 'selection': sel,
         'record': {'available': not reason, 'reason': reason, 'action_param': action_param,

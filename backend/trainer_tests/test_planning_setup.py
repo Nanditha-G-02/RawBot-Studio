@@ -5,6 +5,7 @@
 the simulated robot, and how a demonstration is recorded in each of the five setups."""
 
 import math
+from pathlib import Path
 import time
 
 import pytest
@@ -156,11 +157,25 @@ def test_simulation_only_works_without_any_arm(world, hw):
         assert a[k]['available'], k
     assert not a['leader']['available'] and not a['hand_guided']['available']
     assert not opts(st, 'targets')['follower']['available']
-    # cameras of the robot configuration must publish to record
+    # cameras of the robot configuration must publish to record: with no real camera node,
+    # a simulated camera takes the topic, live only once frames arrive
     hw.ros.pubs[CAMS['global']] = []
+    hw.ros.msgs.pop(CAMS['global'], None)
     st = hw.status(RT)
     assert not st['planning']['record']['available']
+    assert 'Simulated camera global' in st['planning']['record']['reason']
+    assert st['planning']['sim_cameras'] == [{'name': 'global', 'topic': CAMS['global'],
+                                              'view': 'scene'}]
+    assert st['sim']['chain']['joints']
+    hw.ros.publish(CAMS['global'], [], [], publisher=None)     # the page's frames arrive
+    st = hw.status(RT)
+    cam = st['planning']['cameras'][0]
+    assert cam['sim'] and cam['live'] and st['planning']['record']['available']
+    assert 'sim' in {c['id']: c for c in st['planning']['checks']}['cameras']['label']
+    st = hw.setup(RT, sim_cameras=False)             # switched off: the real camera is needed
+    assert not st['planning']['sim_cameras']
     assert 'Camera global' in st['planning']['record']['reason']
+    hw.setup(RT, sim_cameras=True)
     hw.ros.unknown.add(CAMS['global'])      # rosapi cannot tell: not blocking
     assert hw.status(RT)['planning']['record']['available']
 
@@ -298,12 +313,13 @@ def test_selection_sets_what_drives_the_simulated_robot(world, hw):
 def test_leader_capture_replays_in_simulation(world, hw):
     hw.setup(RT, mode='simulation')
     rec = hw.save_capture(RT, {'role': 'leader', 'names': J,
-                               'samples': [[0.0, [0.0] * 6], [1.0, [0.4] * 6]]})
+                               'samples': [[0.0, [0.0] * 6], [1.0, [0.4, -0.4, 0.4, 0.0, 0.4,
+                                                                    0.4]]]})
     st = hw.sim_command(RT, {'command': 'replay', 'capture': rec['id'], 'speed': 4})
     assert st['sim']['drive'] == 'replay' and rec['id'] in st['sim']['replay']['label']
     for _ in range(30):
         hw.sim.step(1 / 30)
-    assert all(abs(v - 0.4) < 1e-6 for v in hw.sim.pos)
+    assert [round(v, 6) for v in hw.sim.pos] == [0.4, -0.4, 0.4, 0.0, 0.4, 0.4]
     with pytest.raises(HardwareError):
         hw.sim_command(RT, {'command': 'replay', 'capture': '../x'})
 
@@ -673,3 +689,141 @@ def test_mixed_robot_joint_pairs(world, hw):
         hw.sim.step(1 / 30)
     assert hw.sim.pos[5] == pytest.approx(0.6) and hw.sim.pos[0] == pytest.approx(0.1)
     assert st['planning']['record']['available'], st['planning']['record']['reason']
+
+
+# ------------------------------------------------- kinematics and workspace limits ---
+def test_kinematics_from_any_urdf_chain():
+    from physios_trainer.hardware import kinematics as K
+    # a 2-link planar arm in a URDF summary, plus a branch (finger) and fixed links
+    urdf = [{'name': 'j1', 'type': 'revolute', 'parent': 'base', 'child': 'a', 'xyz': [0, 0, 0.1],
+             'rpy': [0, 0, 0], 'axis': [0, 1, 0], 'lower': -2, 'upper': 2},
+            {'name': 'j2', 'type': 'revolute', 'parent': 'a', 'child': 'b', 'xyz': [0.2, 0, 0],
+             'rpy': [0, 0, 0], 'axis': [0, 1, 0], 'lower': -2, 'upper': 2},
+            {'name': 'tip', 'type': 'fixed', 'parent': 'b', 'child': 'c', 'xyz': [0.1, 0, 0],
+             'rpy': [0, 0, 0], 'axis': [1, 0, 0]},
+            {'name': 'finger', 'type': 'prismatic', 'parent': 'a', 'child': 'f',
+             'xyz': [0, 0.02, 0], 'rpy': [0, 0, 0], 'axis': [0, 1, 0]}]
+    c = K.Chain(urdf, {'j1': 'shoulder', 'j2': 'elbow'})
+    assert c.moving == ['shoulder', 'elbow']
+    assert [round(v, 4) for v in c.fk({})] == [0.3, 0.0, 0.1]
+    target = c.fk({'shoulder': 0.3, 'elbow': -0.6})
+    q, err = c.ik({}, target)
+    assert err < 1e-3
+    s = K.Chain(K.SO101_CHAIN)
+    assert [round(v, 3) for v in s.fk({})] == [0.275, 0.0, 0.231]     # as the 3D view
+    ws = K.workspace_from_profile({'x_min_mm': 60, 'x_max_mm': 320, 'y_min_mm': -220,
+                                   'y_max_mm': 220, 'base_keepout_mm': 70})
+    assert K.check(ws, [0.2, 0, 0.02]) is None
+    assert 'below the table' in K.check(ws, [0.2, 0, -0.01])
+    assert 'base' in K.check(ws, [0.03, 0, 0.05])
+    assert 'table area' in K.check(ws, [0.45, 0, 0.02])
+    ws['keepouts'] = [{'id': 'cup', 'x_min_mm': 150, 'x_max_mm': 200, 'y_min_mm': -20,
+                       'y_max_mm': 20}]
+    assert 'cup' in K.check(ws, [0.17, 0, 0.05])
+
+
+def test_simulated_robot_tool_moves_and_holds_at_the_table(world, hw):
+    st = hw.setup(RT, mode='simulation', workspace={'x_min_mm': 60, 'x_max_mm': 320,
+                                                     'y_min_mm': -220, 'y_max_mm': 220,
+                                                     'base_keepout_mm': 70})
+    p = st['planning']
+    assert p['robot']['kinematics'] and p['robot']['workspace_guard']
+    assert st['sim']['tool_mm'] == [275.0, 0.0, 231.0]
+    # tool moves (inverse kinematics): 3 cm down
+    hw.sim_command(RT, {'command': 'cartesian', 'delta': [0, 0, -0.03]})
+    for _ in range(60):
+        hw.sim.step(1 / 30)
+    assert abs(hw.sim.view()['tool_mm'][2] - 201.0) < 1.0
+    with pytest.raises(HardwareError) as e:
+        hw.sim_command(RT, {'command': 'cartesian', 'delta': [0, 0, -0.3]})
+    assert 'below the table' in str(e.value)
+    # GUI targets that would drive the tool into the table are held, with the reason
+    hw.sim_command(RT, {'command': 'targets', 'targets': {'shoulder_lift': 1.2,
+                                                          'elbow_flex': 1.2}})
+    for _ in range(120):
+        hw.sim.step(1 / 30)
+    v = hw.sim.view()
+    assert v['blocked'] and v['tool_mm'][2] >= 0
+    ch = {c['id']: c for c in hw.status(RT)['planning']['checks']}
+    assert ch['workspace']['state'] == 'warn' and 'held' in ch['workspace']['detail']
+    # following a real arm is never held, only flagged (approximate model)
+    hw.setup(RT, workspace_guard=False)
+    assert not hw.status(RT)['planning']['robot']['workspace_guard']
+
+
+def test_motion_workers_get_the_workspace(world, hw):
+    register(world, hw, ('follower',))
+    hw.setup(RT, mode='follower_only', workspace={'x_min_mm': 60, 'x_max_mm': 320,
+                                                   'y_min_mm': -220, 'y_max_mm': 220})
+    live(hw, leader=False)
+    lim = [{'name': n, 'min': -1.5, 'max': 1.5, 'speed': 0.5} for n in J]
+    prep = hw.jog_prepare(RT, {'names': J, 'limits': lim})
+    k = prep['config']['kinematics']
+    assert k['workspace']['x_max_mm'] == 320 and k['names']['shoulder_pan'] == 'shoulder_pan'
+    import sys as _sys
+    _sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'physios_trainer'))
+    from hardware import kinematics as K2          # how the workers import it
+    c = K2.Chain(k['joints'], k['names'])
+    assert K2.check(k['workspace'], c.fk({'shoulder_lift': 1.2, 'elbow_flex': 1.2}))
+
+
+# ------------------------------------------------------- policy and hybrid recording ---
+class FakeRollouts:
+    def __init__(self):
+        self.r = None
+        self.cmds = []
+
+    def active(self):
+        return self.r
+
+    def takeover(self, rid, on):
+        self.cmds.append(('takeover', on))
+        self.r['live']['operator'] = on
+        return self.r
+
+
+def test_policy_and_hybrid_recording(world, hw):
+    register(world, hw, ('follower',))
+    hw.setup(RT, mode='follower_only')
+    live(hw, leader=False)
+    hw.rollouts = FakeRollouts()
+    st = hw.setup(RT, selection={'action': 'policy', 'target': 'follower'})
+    a = opts(st, 'action_sources')
+    assert not a['policy']['available'] and a['policy']['short'] == 'no policy running'
+    hw.rollouts.r = {'id': 'r1', 'status': 'ready', 'live': {}}
+    st = hw.status(RT)
+    p = st['planning']
+    assert p['selection']['action'] == 'policy'
+    assert not p['record']['available'] and 'Start the policy' in p['record']['reason']
+    assert st['sim']['running']                        # ready for an operator takeover
+    hw.rollouts.r['status'] = 'running'
+    st = hw.status(RT)
+    p = st['planning']
+    assert p['record']['available'] and p['record']['action_param'] == 'leader'
+    assert {c['id']: c['state'] for c in p['checks']}['policy'] == 'ok'
+    # hybrid: take over lines the simulated leader up with the arm, then hand back
+    hw.sim_command(RT, {'command': 'targets', 'targets': {'shoulder_pan': 1.0}})
+    st = hw.hybrid(RT, True)
+    assert hw.rollouts.cmds[-1] == ('takeover', True)
+    assert hw.sim.pos == [0.1] * 6 and hw.sim.drive == 'manual'
+    assert st['planning']['rollout']['operator']
+    hw.hybrid(RT, False)
+    assert hw.rollouts.cmds[-1] == ('takeover', False) and hw.sim.drive == 'follower'
+    hw.rollouts.r = None
+    with pytest.raises(HardwareError):
+        hw.hybrid(RT, True)
+
+
+def test_hybrid_arbiter_logs_interventions():
+    from physios_trainer.rollout_worker import Arbiter, operator_values
+    t = [100.0]
+    arb = Arbiter(clock=lambda: t[0])
+    assert arb.update(False) is None
+    assert arb.update(True) == 'takeover' and arb.since == 100.0
+    t[0] = 103.5
+    assert arb.update(True) is None
+    assert arb.update(False) == 'handback'
+    assert arb.interventions == [[100.0, 103.5]] and arb.since is None
+    msg = {'name': ['b', 'a'], 'position': [2.0, 1.0]}
+    assert operator_values(msg, ['a', 'b']) == [1.0, 2.0]
+    assert operator_values(msg, ['a', 'c']) is None

@@ -163,6 +163,24 @@ Also fixed while testing: a page coming back to a follow session showed it as pa
 **Not validated:** follow mode on the real arm (bridge.py executing the stream), the metadata
 files with the real recorder.
 
+### Kinematics, workspace, simulated cameras, policy and hybrid recording (17 Nov 2026)
+
+`kinematics.py` (URDF chain or approximate SO-101 chain, FK, IK, workspace checks); workspace holds
+in the simulated robot (per joint), follow mode and host rollout; simulated cameras rendered by the
+page; action source *Policy* with Take over / Hand back through the rollout worker; takeover spans
+stored with the take (`record.annotate`). trainer_tests **160** (1 skipped; new: chain, tool moves,
+table hold, workers get the workspace, policy / hybrid recording, arbiter, simulated cameras);
+`test/planning` **48** (hybrid take annotated); `plan_hw_check.py` **9/9** (P8: Simulation Only
+with the stand-in cameras off - both cameras become *sim* and live only once this page publishes
+frames, recording ready, tool pad lifts the tool, a pose through the table is held, real cameras
+take over again; light and dark). `hw_ui_check.py` 9/9, `setup_flow_check.py` 10/10, 26-step walk-through with arms and with `--hardware none`, Optimize: pass.
+Fixed while testing: a held step froze every joint (keys could not move the pan while the elbow
+sat at the table); now only the joints that take the tool out are held.
+
+**Not validated:** anything on the real arm; the Policy panel and hybrid takeover in a browser
+(the stand-in has no LeRobot rollout - covered by unit tests with a fake rollout service); the SO-101
+chain's accuracy against the real arm (approximate, a guard with a margin).
+
 ## 3. Deployment validation
 
 | Path | What was run | Result |

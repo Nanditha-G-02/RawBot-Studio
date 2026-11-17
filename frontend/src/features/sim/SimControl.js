@@ -127,7 +127,13 @@ export default function SimControl({ robotType, sim, action, compact }) {
         </button>
       </div>
       {sim.error && <div className="text-[12px] text-signal-err">{sim.error}</div>}
+      {sim.blocked && (
+        <div className="text-[12px] text-signal-warn" data-sim-blocked>
+          {sim.drive === 'leader' || sim.drive === 'follower' ? 'Outside the workspace' : 'Held'}: tool {sim.blocked}
+        </div>
+      )}
       {action === 'gui' && <Sliders names={names} sim={sim} pos={pos} send={send} />}
+      {action === 'gui' && sim.kinematics && <ToolPad sim={sim} send={send} />}
       {(action === 'keyboard' || action === 'gamepad') && (
         <HeldControl names={names} kind={action} pos={pos} send={send} />
       )}
@@ -346,6 +352,53 @@ function JointPairs({ robotType, li, dispatch }) {
           />
         </label>
       ))}
+    </div>
+  );
+}
+
+// tool moves by inverse kinematics on the robot's model: hold a button, 1 cm per step
+const TOOL_KEYS = [
+  ['x', 1, 'Fwd'],
+  ['x', -1, 'Back'],
+  ['y', 1, 'Left'],
+  ['y', -1, 'Right'],
+  ['z', 1, 'Up'],
+  ['z', -1, 'Down'],
+];
+function ToolPad({ sim, send }) {
+  const timer = useRef(null);
+  const move = (axis, dir, quiet) => {
+    const d = [0, 0, 0];
+    d['xyz'.indexOf(axis)] = 0.01 * dir;
+    send({ command: 'cartesian', delta: d }, quiet);
+  };
+  const stop = () => {
+    if (timer.current) clearInterval(timer.current);
+    timer.current = null;
+  };
+  useEffect(() => stop, []);
+  const t = sim.tool_mm;
+  return (
+    <div className="flex flex-wrap items-center gap-1.5 text-[12px]" data-tool-pad>
+      <span className="label mr-1">Tool</span>
+      {TOOL_KEYS.map(([axis, dir, label]) => (
+        <button
+          key={label}
+          type="button"
+          className="btn btn-sm select-none"
+          onPointerDown={() => {
+            move(axis, dir);
+            stop();
+            timer.current = setInterval(() => move(axis, dir, true), 250);
+          }}
+          onPointerUp={stop}
+          onPointerLeave={stop}
+          data-tool={`${axis}${dir > 0 ? '+' : '-'}`}
+        >
+          {label}
+        </button>
+      ))}
+      {t && <span className="ml-auto font-mono text-[11px] text-ink-3 tabular-nums" data-tool-mm>{t.map((v) => Math.round(v)).join(' · ')} mm</span>}
     </div>
   );
 }
