@@ -214,6 +214,7 @@ function ArmCard({ robotType, card, busy, run, onConfigure, onCalibrate, rosbrid
         <KeyValue
           rows={[
             ['Connection', card.state === 'connected' ? (card.source === 'ros' ? 'Verified · live ROS messages from bridge.py' : 'Verified · every motor answers (read-only)') : STATE_LABEL[card.state]],
+            card.publishes && ['ROS', <span data-arm-publishes={card.publishes}>Publishing <span className="font-mono">{card.publishes}</span> from this session</span>],
             [
               'Serial port',
               port ? (
@@ -314,7 +315,9 @@ function Unassigned({ robotType, status, busy, run }) {
                 <div className="text-[11.5px] text-ink-3">Registered as the {u.registered_elsewhere.role} of {u.registered_elsewhere.robot_type}.</div>
               )}
               {u.holders?.length > 0 && <div className="text-[11.5px] text-signal-warn">Held by {u.holders.map((h) => `${h.name} (PID ${h.pid})`).join(', ')} - stop it once so the motors can be checked.</div>}
-              {pr && !pr.ok && pr.error && <div className="text-[11.5px] text-signal-warn">{pr.error}</div>}
+              {pr && !pr.ok && pr.error && !(u.holders?.length > 0 && pr.skipped) && (
+                <div className="text-[11.5px] text-signal-warn" data-probe-error>{pr.error}</div>
+              )}
               <div className="flex gap-2">
                 {['leader', 'follower'].map((role) => (
                   <button
@@ -979,7 +982,10 @@ export default function HardwareSetup() {
         </div>
         <div className="mt-3 flex flex-wrap gap-x-5 gap-y-1 text-[11.5px] text-ink-3">
           <span>
-            <StatusDot tone={status.ros.connected ? 'ok' : 'err'} label={status.ros.connected ? 'ROS (rosbridge) reachable' : 'ROS not reachable'} />
+            <StatusDot
+              tone={status.ros.connected ? 'ok' : status.ros.error ? 'err' : 'idle'}
+              label={status.ros.connected ? 'ROS (rosbridge) reachable' : status.ros.error ? `ROS not reachable: ${status.ros.error}` : 'ROS not checked yet'}
+            />
           </span>
           <span>Follower topic <span className="font-mono">{status.topics?.follower || '—'}</span></span>
           <span>Leader / command topic <span className="font-mono">{status.topics?.leader || '—'}</span></span>

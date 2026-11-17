@@ -78,6 +78,8 @@ def options(mode, arms, caps, sim, selection=None, cameras=None, extra=None, rob
     # the leader read by RawBot Studio's own serial session drives the simulated robot too
     ls = L.get('state') == 'connected' and L.get('source') == 'serial' and 'leader' in used
     fr = F.get('state') == 'connected' and F.get('source') == 'ros'
+    # follower joint states on ROS: bridge.py, or RawBot Studio relaying its serial session
+    fs = fr or bool(extra.get('follower_relay'))
     sim_on = bool(sim.get('running'))
     config = mode if mode in ('simulation', 'leader_sim') else (
         'physical_sim' if sim_on else mode)
@@ -160,7 +162,7 @@ def options(mode, arms, caps, sim, selection=None, cameras=None, extra=None, rob
 
     def obs_ok(o):
         if o == 'follower':
-            if not fr:
+            if not fs:
                 return arm_reason('follower', 'Follower joint states')
             if tg == 'sim' and not (a == 'leader' and mode == 'leader_follower'):
                 return ('The simulated robot is the target; the physical follower does not '

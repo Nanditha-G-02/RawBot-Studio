@@ -547,3 +547,57 @@ def test_only_a_leader_in_leader_follower_uses_the_simulated_follower(world, hw)
     hw.ports_at = 0
     st = hw.status(RT)
     assert st['planning']['config'] != 'leader_sim' and not st['planning']['auto']
+
+
+# ------------------------------------------------ follower without bridge.py ---
+def test_detect_reports_why_a_port_was_not_scanned(world, hw):
+    world.plug('ttyACM0', serial='FOLL-B')
+    world.hold('ttyACM0')                    # e.g. a bridge.py or another program
+    st = hw.detect(RT)
+    u = st['unassigned'][0]
+    assert u['probe'] and u['probe']['skipped'] and 'in use by' in u['probe']['error']
+
+
+def test_serial_errors_are_explained():
+    from physios_trainer.hardware.manager import explain_serial_error
+    e = explain_serial_error("[Errno 16] Device or resource busy: '/dev/ttyACM0'", '/dev/ttyACM0')
+    assert 'ModemManager' in e and 'Errno 16' in e
+    assert 'dialout' in explain_serial_error('[Errno 13] Permission denied', '/dev/ttyACM0')
+    assert 'power supply' in explain_serial_error('[TxRxResult] There is no status packet!', 'x')
+    assert explain_serial_error('something else', 'x') == 'something else'
+
+
+def test_follower_read_over_serial_is_published_for_ros(world, hw):
+    """Follower Only without bridge.py: RawBot Studio's read-only session reads the motors and
+    publishes their joint states on the follower topic; hand-guided recording works; direct
+    control (which needs bridge.py to move the arm) stays off."""
+    world.plug('ttyACM1', serial='FOLL-B')
+    st = hw.detect(RT)
+    hw.assign(RT, st['unassigned'][0]['key'], 'follower')
+    hw.setup(RT, mode='follower_only')
+    st = hw.connect(RT, 'follower')
+    for _ in range(40):
+        if hw._monitor_status(RT, 'follower').get('phase') == 'running':
+            break
+        time.sleep(0.1)
+    world.set('ttyACM1', actual={'1': 3072, '2': 2048, '3': 2048, '4': 2048, '5': 2048,
+                                 '6': 2048})
+    time.sleep(0.4)
+    hw.report_action_source(RT, True, 'follower')
+    st = hw.status(RT)
+    F = st['arms']['follower']
+    assert F['state'] == 'connected' and F['source'] == 'serial'
+    assert F['publishes'] == '/joint_states' and hw.relay.owns('/joint_states')
+    msg = hw.relay.tick()
+    assert msg['name'][0] == 'shoulder_pan' and msg['position'][0] == pytest.approx(math.pi / 2)
+    assert st['capabilities']['hand_guided_record']['available']
+    assert not st['capabilities']['follower_control']['available']      # needs bridge.py
+    p = st['planning']
+    assert p['selection']['action'] == 'hand_guided' and p['record']['available'], p['record']
+    # our own messages do not make the topic look like a bridge.py
+    hw.ros.publish('/joint_states', J, [0.0] * 6, publisher=None)
+    assert hw._ros_live(RT, 'follower', hw.reg.setup(RT))[0] is False
+    # bridge.py starts publishing: RawBot Studio stops relaying
+    hw.ros.pubs['/joint_states'] = ['/so101_bridge']
+    st = hw.status(RT)
+    assert 'publishes' not in st['arms']['follower'] and not hw.relay.topic

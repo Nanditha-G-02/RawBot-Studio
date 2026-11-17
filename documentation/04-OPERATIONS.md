@@ -230,6 +230,26 @@ environment with LeRobot (conda env `lerobot` by default).
   record as usual; the follower's joints are saved as both state and action. The Record page
   shows "Hand-guided" while this is active.
 
+**An arm is not detected or not connected: `./scripts/hw-doctor.sh`.** It checks, in order, the
+USB adapter (sysfs), permission (`dialout`), which program holds the port (also ModemManager and
+brltty, which RawBot Studio cannot see because they run as another user), the motors with your
+LeRobot environment (read-only ping of IDs 1-6, baud rate, calibration), the training service and
+the arm's card, and the robot runtime (container, rosbridge :9090, the arm's joint-state topic and
+its publishers). It names the first failing link and its fix. Nothing moves.
+
+Typical order on a fresh PC: plug in and power the arm → `./scripts/hw-doctor.sh` → Robots →
+Hardware → **Detect Hardware** → **Assign as follower** (the card says *Not set up* until a port
+is assigned) → **Connect** (bridge.py stopped) or start bridge.py → `./start_physios.sh
+--with-robot` for ROS.
+
+**Follower without bridge.py.** When RawBot Studio's read-only session has the follower and no
+other program publishes the follower state topic (e.g. `/follower_joint_states`), RawBot Studio
+publishes the session's readings there (radians, 30 Hz; the card shows *ROS · Publishing …*).
+Monitoring, the simulation view and hand-guided recording then work without bridge.py; Feetech
+motors are passive after power-up, so the arm can be moved by hand. Direct control, inference and
+policy runs still need bridge.py, which writes the motor commands. When bridge.py starts
+publishing, RawBot Studio stops.
+
 **Emergency stop without a browser.** `./scripts/estop.sh` stops a jog session and a host
 rollout and cancels a calibration, even when no page is open; if the training service does
 not answer it kills the workers directly. *Stop all* on the Hardware setup page does the same.
@@ -433,7 +453,7 @@ Everything runs from the repository itself, without ROS, a GPU or a robot:
 ```bash
 cd backend
 python3 -m pytest -q tests            # gateway: 22
-python3 -m pytest -q trainer_tests    # training service, hardware, planning setup, standalone layout: 149 (1 skipped)
+python3 -m pytest -q trainer_tests    # training service, hardware, planning setup, standalone layout: 152 (1 skipped)
 cd ../robot/src/physical_ai_server
 python3 -m pytest -q test/planning    # planning engine: 46
 cd ../../../frontend && CI=true npm run build   # production build, lint warnings fail it

@@ -139,7 +139,9 @@ def compute(mode, arms, extra=None):
             put('hand_guided_record', False, 'Hand-guided recording is for Follower Only '
                 '(with a leader, the leader is the action source).')
         else:
-            r = None if fr else why_ros(F, 'follower', 'Recording')
+            # bridge.py, or RawBot Studio relaying its own serial readings (relay.py)
+            r = None if (fr or extra.get('follower_relay')) else why_ros(F, 'follower',
+                                                                          'Recording')
             if not r and extra.get('action_source_supported') is False:
                 r = ('The robot runtime is older than this feature. Rebuild it: '
                      './docker/physios-docker.sh build robot')

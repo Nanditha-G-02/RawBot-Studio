@@ -2,6 +2,13 @@
 
 ## 2.0.0, renamed (2026-11-13)
 
+* **Physical follower detection.** `./scripts/hw-doctor.sh` walks USB → permission → port holders
+  (incl. ModemManager / brltty) → LeRobot motor scan (read-only) → training service → robot
+  runtime / ROS topics and names the first failing link. Detect now gives every port a reason;
+  serial errors are explained. Without bridge.py, RawBot Studio publishes the follower's joint
+  states from its read-only session (monitoring and hand-guided recording work). The Hardware
+  page says *ROS not checked yet* instead of *not reachable* before a connection is tried.
+
 * **Robot-aware Planning.** Options come from the robot's capabilities (joints, gripper, limits,
   simulation model, serial access, control methods) - from a custom robot's URDF or the robot
   configuration, never from a model name. Only a physical leader → its simulated follower is the

@@ -35,6 +35,7 @@ from physios_trainer.hardware import planning as planmod
 from physios_trainer.hardware import ports as portmod
 from physios_trainer.hardware import robotcaps
 from physios_trainer.hardware.registry import MODES, ROLES, Registry, motor_spec
+from physios_trainer.hardware.relay import StateRelay
 from physios_trainer.hardware.simbot import SimRobot
 from physios_trainer.util import atomic_write_json, now_iso, read_json
 
@@ -189,6 +190,9 @@ class Hardware:
         self.sim = SimRobot(self.ros.url, sampler=lambda t: self.ros.sample(t),
                             bridge_factory=_bridge if monitor else None, log=log,
                             thread=monitor)
+        # the follower's joint states from RawBot Studio's serial session, when no bridge.py
+        self.relay = StateRelay(self.ros.url, bridge_factory=_bridge if monitor else None,
+                                log=log, thread=monitor)
         self._py_cache = {}
         self._ports_seen = False
         self._tick_ports = set()
@@ -341,8 +345,11 @@ class Hardware:
             os.unlink(cfg)
         line = next((x for x in p.stdout.splitlines() if x.startswith('RAWBOT_HW ')), None)
         if not line:
-            raise HardwareError('The motor scan failed: %s' % (p.stderr or p.stdout)[-400:])
+            raise HardwareError(explain_serial_error((p.stderr or p.stdout)[-400:],
+                                                     port['device']))
         res = json.loads(line[10:])
+        if res.get('error'):
+            res['error'] = explain_serial_error(res['error'], port['device'])
         res['device'] = port['device']
         res['checked_at'] = time.time()
         self.probes[port['key']] = res
@@ -423,12 +430,15 @@ class Hardware:
             try:
                 results[p['key']] = self._probe(robot_type, p)
             except HardwareError as e:
-                results[p['key']] = {'ok': False, 'error': str(e), 'skipped': True}
+                results[p['key']] = {'ok': False, 'error': str(e), 'skipped': True,
+                                     'device': p['device'], 'checked_at': time.time()}
+                self.probes[p['key']] = results[p['key']]   # shown with the port
 
         threads = []
         for p in ps:
-            if spec and not p['holders'] and not p.get('own_session') and \
-                    p.get('access') != 'denied':
+            # every port gets a result: a held / denied port is not opened, but its reason is
+            # recorded so the operator sees why it was not scanned
+            if spec:
                 th = threading.Thread(target=one, args=(p,))
                 th.start()
                 threads.append(th)
@@ -627,7 +637,7 @@ class Hardware:
             return False, None, [], []
         age, names, vals = self.ros.sample(topic)
         live = age is not None and age <= ROS_LIVE_S and bool(names)
-        if live and self.sim.owns(topic):
+        if live and (self.sim.owns(topic) or self.relay.owns(topic)):
             # the simulated robot publishes this topic: only another publisher is an arm
             pubs = self.ros.foreign_publishers(topic)
             live = bool(pubs)
@@ -665,7 +675,9 @@ class Hardware:
                 'key': p['key'], 'port': _port_view(p), 'registered_elsewhere':
                     dev and {'robot_type': dev.get('robot_type'), 'role': dev.get('role')},
                 'probe': _probe_view(pr), 'holders': p['holders']})
+        relay_on = self._update_relay(robot_type, setup, arms)
         extra = {'active_rollout': bool(self.rollouts and self.rollouts.active()),
+                 'follower_relay': relay_on,
                  'jog_active': bool(self.jog and self.jog['proc'].poll() is None),
                  'calibration_active': bool(self.calib and self.calib['proc'].poll() is None),
                  'action_source_supported': self.action_source_supported.get(robot_type),
@@ -766,6 +778,7 @@ class Hardware:
         out = planmod.options(mode, arms, caps, sim, setup.get('selection'), cams, {
             'jog_running': extra.get('jog_active'), 'compare': compare,
             'calibration_active': extra.get('calibration_active'),
+            'follower_relay': extra.get('follower_relay'),
             'leader_state_supported': self.action_source_supported.get(
                 (robot_type, 'leader_state'))}, robot=rc, auto=auto)
         # what drives the simulated robot follows the selection: the leader arm, a mirror of
@@ -786,7 +799,26 @@ class Hardware:
         out['sim'] = sim
         return out
 
+    def _update_relay(self, robot_type, setup, arms):
+        """Publish the follower's joint states from the read-only serial session when the
+        configuration has a follower, RawBot Studio reads it and nothing else publishes its
+        state topic (bridge.py stopped)."""
+        F = arms['follower']
+        ft = setup['topics'].get('follower')
+        on = bool('follower' in MODES[setup['mode']]['arms'] and ft and
+                  F.get('state') == 'connected' and F.get('source') == 'serial' and
+                  not self.ros.foreign_publishers(ft))
+        if on:
+            self.relay.set(ft, self._arm_sampler(robot_type, setup, 'follower'))
+            F['publishes'] = ft
+        elif self.relay.topic:
+            self.relay.clear()
+        return on
+
     def _leader_sampler(self, robot_type, setup):
+        return self._arm_sampler(robot_type, setup, 'leader')
+
+    def _arm_sampler(self, robot_type, setup, role):
         """Leader joints from RawBot Studio's read-only serial session, in radians: raw
         Present_Position ticks of the calibrated motors (LeRobot half-turn homing puts the
         middle of each range at 2048) -> (ticks - 2048) * 2*pi / 4096, then the joint map's
@@ -794,7 +826,7 @@ class Hardware:
         jm = setup.get('joint_map') or {}
 
         def sample():
-            mon = self._monitor_status(robot_type, 'leader')
+            mon = self._monitor_status(robot_type, role)
             pos = mon.get('positions') or {}
             if mon.get('phase') != 'running' or not pos:
                 return None, [], [], {}
@@ -1418,8 +1450,34 @@ class Hardware:
     def stop(self):
         self._stop = True
         self.sim.stop()
+        self.relay.stop()
         for k in list(self.monitors):
             self._stop_monitor(*k, wait=1.0)
+
+
+def explain_serial_error(text, device):
+    """A serial / motor-bus error with its likely cause, in the operator's words."""
+    t = str(text or '')
+    low = t.lower()
+    if 'errno 16' in low or 'resource busy' in low or 'could not exclusively lock' in low:
+        why = ('another program has %s open. RawBot Studio cannot see programs of other users: '
+               'on Ubuntu this is often ModemManager (sudo systemctl stop ModemManager) or '
+               'brltty, or a bridge running in a container. ./scripts/hw-doctor.sh shows it.'
+               % device)
+    elif 'errno 13' in low or 'permission denied' in low:
+        why = ('no permission to open %s: sudo usermod -aG dialout $USER, then log out and in.'
+               % device)
+    elif 'errno 2' in low or 'no such file' in low or 'errno 19' in low:
+        why = '%s disappeared (cable or USB power): re-plug it and Detect again.' % device
+    elif 'no status packet' in low or 'incorrect status packet' in low:
+        why = ('the board answers but the motors do not: switch on the arm\'s own power supply '
+               '(USB powers only the board) and check the 3-pin cable to the first motor.')
+    elif 'no module named' in low and 'lerobot' in low:
+        why = 'LeRobot is not installed in the selected Python environment.'
+    else:
+        return t
+    return '%s - %s' % (why[0].upper() + why[1:], t.strip().splitlines()[-1][:160] if t.strip()
+                        else '')
 
 
 TICKS_PER_TURN = 4096

@@ -133,6 +133,21 @@ trainer_tests 149 (1 skipped), planning 46, gateway 22.
 **Not validated:** a real custom robot end to end (its robot type must be active on the robot
 server), a robot with more than 6 joints in the browser.
 
+### Physical follower detection (17 Nov 2026)
+
+Root causes found in the code: Detect skipped held / permission-denied ports without recording a
+reason; port holders of other users (ModemManager, brltty, container processes) are invisible to
+the /proc scan, so the scan failed with a raw serial error; nothing published the follower's joint
+states on ROS without bridge.py; "ROS not reachable" was shown before a connection was even tried.
+Fixed: every port gets a reason, serial errors are explained, RawBot Studio relays its serial
+readings on the follower topic when nothing else does (`relay.py`), the ROS line says *not checked
+yet* until a connection is attempted. New `scripts/hw-doctor.sh`, run against the simulated
+adapters (free, held by a stand-in bridge.py, three motors missing) and the dev stack.
+`test_planning_setup.py` 27; trainer_tests 152 (1 skipped); browser checks unchanged and passing.
+
+**Not validated:** your PC (ModemManager / brltty / dialout state, the real arm's motors), the
+relay feeding the real physical_ai_server.
+
 ## 3. Deployment validation
 
 | Path | What was run | Result |
