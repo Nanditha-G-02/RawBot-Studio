@@ -59,6 +59,20 @@ def _clean_setup(setup):
     cams = setup.get('cameras')
     if isinstance(cams, list):
         out['cameras'] = [str(c)[:200] for c in cams[:8]]
+    rb = setup.get('robot')
+    if isinstance(rb, dict):
+        # what the robot is (RawBot Studio robotcaps): joints, gripper, joint pairs
+        r = {}
+        if isinstance(rb.get('names'), list):
+            r['names'] = [str(n)[:60] for n in rb['names'][:32]]
+        for k in ('gripper', 'source'):
+            if isinstance(rb.get(k), str):
+                r[k] = rb[k][:120]
+        if isinstance(rb.get('joint_pairs'), dict):
+            r['joint_pairs'] = {str(k)[:60]: str(v)[:60] for k, v in
+                                list(rb['joint_pairs'].items())[:32]}
+        if r:
+            out['robot'] = r
     return out or None
 
 
@@ -795,6 +809,11 @@ class PlanningService:
         if a.get('setup'):
             attempt['setup'] = a['setup']
         e.setdefault('attempts', []).append(attempt)
+        if result == 'saved' and index is not None:
+            self._export_recording(prog.get('dataset_id'), {
+                'episode_index': index, 'plan_id': plan_id, 'episode_id': eid,
+                'plan_version': a.get('plan_version'), 'recorded_at': attempt['ended_at'],
+                'valid': bool((check or {}).get('ok')), 'setup': a.get('setup')})
         if result == 'saved':
             e['dataset_episode_index'] = index
             e['validation'] = check
@@ -1045,6 +1064,35 @@ class PlanningService:
                     changed = {'plan_id': pid, 'episode_id': eid, 'status': st['status']}
         return changed
 
+    # ---- recording metadata in the dataset (meta/) ----------------------------------
+    RECORDING_FILE = 'rawbot_recordings.jsonl'
+    ROBOT_FILE = 'rawbot_robot.json'
+
+    def _export_recording(self, dataset_id, entry=None, dataset_path=None):
+        """How each episode was recorded (one JSON line per saved plan take) and the robot
+        configuration it was recorded with, next to LeRobot's own meta files. LeRobot ignores
+        files it does not know, so the dataset stays loadable. Best effort."""
+        try:
+            path = Path(dataset_path) if dataset_path else dsio.resolve(self.dataset_root,
+                                                                         dataset_id)
+            meta = path / 'meta'
+            if not meta.is_dir():
+                return
+            from physical_ai_server.planning.store import atomic_write_json
+            params = self._ctx('robot_params', {}) or {}
+            atomic_write_json(meta / self.ROBOT_FILE, {
+                'format': 'rawbot-studio/robot/v1',
+                'robot_type': self._ctx('get_robot_type', '') or '',
+                'joint_order': params.get('joint_order'),
+                'joint_topic_list': params.get('joint_topic_list'),
+                'camera_topic_list': params.get('camera_topic_list'),
+                'updated_at': now_iso()})
+            if entry:
+                with open(meta / self.RECORDING_FILE, 'a') as f:
+                    f.write(json.dumps(dict(entry, format='rawbot-studio/recording/v1')) + '\n')
+        except Exception as e:  # noqa: BLE001 - never block a recording on this
+            self.log('could not export recording metadata for %s: %s' % (dataset_id, e))
+
     def _note_recent_save(self, dataset_path, plan_id):
         try:
             if not dataset_path:
@@ -1058,6 +1106,10 @@ class PlanningService:
             index = int(info.get('total_episodes') or 0) - 1
             if index < 0:
                 return
+            if not plan_id:   # free recording: the episode and the robot it was recorded with
+                self._export_recording(ds_id, {'episode_index': index, 'plan_id': None,
+                                               'recorded_at': now_iso(), 'setup': None},
+                                       dataset_path=path)
             with self.store.lock:
                 state = self.store.state()
                 recent = [r for r in state.get('recent_saves', [])

@@ -323,6 +323,26 @@ Options a robot or configuration can never use are hidden; temporarily unavailab
 greyed out with a short reason. The check row (robot, joint mapping, gripper, limits, cameras,
 runtime) must be green before recording; a leader missing a joint of the target blocks it.
 
+#### Simulated leader drives the physical follower (virtual teleoperation)
+
+Choose GUI, Keys, Pad, Script or Replay as the source and **Real** as the target: the input moves
+the simulated robot, which becomes the leader, and the physical follower follows it. Below the
+controls, *Follow the simulated leader* uses the direct-control review: joint limits and speed
+from a dataset, three checks, then **▶ Follow** / **❚❚ Pause** and *End session*. Switching on
+lines the simulated leader up with the arm first, so it never jumps. Every joint stays inside the
+reviewed limits and speed; a stale leader or joint state, a closed page, another program on the
+command topic or *Stop all* holds the arm. Needs bridge.py (it executes the commands); the
+commands are recorded as the action, the follower's joints as the state.
+
+**Mixed robots.** When a target joint has no leader joint of the same name, the sync view lists it
+with a picker (target ← leader joint); the pairs are saved per robot and used by the simulated
+follower, the follow mode and the mapping check.
+
+**Dataset metadata.** Every saved episode adds a line to the dataset's
+`meta/rawbot_recordings.jsonl` (episode, plan episode, configuration, action source, target,
+observation, cameras, robot joints and pairs) and refreshes `meta/rawbot_robot.json` (robot type,
+joint order, topics, cameras). LeRobot ignores both files, so datasets stay loadable.
+
 #### Physical Leader + Simulated Follower (one arm)
 
 1. Home or Robots → Hardware setup: choose **Physical Leader + Simulated Follower**. No follower
@@ -453,9 +473,9 @@ Everything runs from the repository itself, without ROS, a GPU or a robot:
 ```bash
 cd backend
 python3 -m pytest -q tests            # gateway: 22
-python3 -m pytest -q trainer_tests    # training service, hardware, planning setup, standalone layout: 152 (1 skipped)
+python3 -m pytest -q trainer_tests    # training service, hardware, planning setup, standalone layout: 155 (1 skipped)
 cd ../robot/src/physical_ai_server
-python3 -m pytest -q test/planning    # planning engine: 46
+python3 -m pytest -q test/planning    # planning engine: 47
 cd ../../../frontend && CI=true npm run build   # production build, lint warnings fail it
 
 # browser walk-throughs against stand-ins (pip install playwright websockets)

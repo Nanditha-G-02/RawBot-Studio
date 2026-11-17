@@ -43,6 +43,7 @@ import { JogPanel } from '../hardware/HardwareSetup';
 import SimControl from '../sim/SimControl';
 
 const MANUAL = ['gui', 'keyboard', 'gamepad'];
+const SIM_LEADS = [...MANUAL, 'script', 'replay'];
 
 const ROBOT_TONE = { connected: 'ok', running: 'sky', lost: 'err', error: 'err', unused: 'idle', off: 'idle' };
 
@@ -155,7 +156,7 @@ export default function PlanningSetup({ compact = false }) {
     }
   });
   const pl = status?.planning;
-  const needs = !!pl && (!pl.record.available || pl.selection.target === 'sim' || MANUAL.includes(pl.selection.action));
+  const needs = !!pl && (!pl.record.available || pl.selection.target === 'sim' || SIM_LEADS.includes(pl.selection.action));
   const open = stored === null ? needs : stored === '1';
   const toggleOpen = () => {
     const v = open ? '0' : '1';
@@ -194,6 +195,7 @@ export default function PlanningSetup({ compact = false }) {
   const sim = status.sim || p.sim || {};
   const simMode = status.mode === 'simulation';
   const leaderSim = p.config === 'leader_sim';
+  const simLeads = p.config === 'sim_leader';
   const robot = p.robot || {};
   const camsLive = p.cameras.filter((c) => c.live !== false).length;
   const recTitle = [rec.reason, ...(rec.streams || []).map((x) => `· ${x.label}`)].filter(Boolean).join('\n');
@@ -273,7 +275,7 @@ export default function PlanningSetup({ compact = false }) {
             <Choice label="Target" kind="target" options={p.targets} value={sel.target} onPick={pick('target')} busy={busy} />
             <Choice label="State" kind="observation" options={p.observations} value={sel.observation} onPick={pick('observation')} busy={busy} />
             <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 pt-1">
-              {!simMode && !leaderSim && (
+              {!simMode && !leaderSim && !simLeads && (
                 <span data-plan-sim-twin={sim.twin ? 'on' : 'off'} title="Run a simulated twin next to the physical robot">
                   <Toggle checked={!!sim.twin} disabled={busy} onChange={(v) => save({ sim_twin: v })} label={<span className="text-[12px]">Simulated twin</span>} />
                 </span>
@@ -312,21 +314,20 @@ function ControlFor({ robotType, status, p, sim, compact }) {
     body = <Note>Move the leader; the follower follows.</Note>;
   } else if (action === 'hand_guided') {
     body = <Note>Move the follower by hand.</Note>;
-  } else if (MANUAL.includes(action)) {
+  } else if (SIM_LEADS.includes(action)) {
+    // the simulated robot is the leader: the input moves it, the real follower follows it
     body = (
-      <JogPanel
-        robotType={robotType}
-        status={status}
-        cap={status.capabilities.follower_control}
-        input={action}
-      />
+      <>
+        <SimControl robotType={robotType} sim={sim} action={action} compact />
+        <JogPanel robotType={robotType} status={status} cap={status.capabilities.follower_control} follow />
+      </>
     );
   }
   return (
     <div className="space-y-3">
       {body}
-      {sim.running && <Note>Twin mirrors the follower.</Note>}
-      {!compact && <Compare compare={p.compare} />}
+      {sim.running && !SIM_LEADS.includes(action) && <Note>Twin mirrors the follower.</Note>}
+      {!compact && !SIM_LEADS.includes(action) && <Compare compare={p.compare} />}
     </div>
   );
 }

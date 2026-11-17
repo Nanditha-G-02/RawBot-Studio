@@ -148,6 +148,21 @@ adapters (free, held by a stand-in bridge.py, three motors missing) and the dev 
 **Not validated:** your PC (ModemManager / brltty / dialout state, the real arm's motors), the
 relay feeding the real physical_ai_server.
 
+### Architecture phases 3, 5 (part) and mixed robots (17 Nov 2026)
+
+Built from the *System Architecture & Scenario Matrix*: scenario A3 (simulated leader → physical
+follower, `jog_worker` follow mode), joint pairs for robots with different joint names, and the
+recording metadata in the dataset's `meta/`. `test_planning_setup.py` 30 (follow set-up, line-up on
+start and on switch-on, missing simulated joints refused, mixed-robot pairs); `test/planning` 47
+(meta files written, `info.json` untouched); `plan_hw_check.py` **8/8** (P7: follow with limits
+review, the stand-in follower tracks the simulated leader, a plan episode recorded and its
+metadata line checked, pause, end); `hw_ui_check.py` 9/9, `setup_flow_check.py` 10/10, 26-step
+walk-through with arms and with `--hardware none`, Optimize. trainer_tests 155 (1 skipped).
+Also fixed while testing: a page coming back to a follow session showed it as paused.
+
+**Not validated:** follow mode on the real arm (bridge.py executing the stream), the metadata
+files with the real recorder.
+
 ## 3. Deployment validation
 
 | Path | What was run | Result |

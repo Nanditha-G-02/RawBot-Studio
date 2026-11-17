@@ -88,7 +88,18 @@ export function usePlanRecording(active) {
   const setup = useMemo(
     () =>
       hwPlan
-        ? { config: hwPlan.config, ...hwPlan.selection, action_param: hwPlan.record.action_param, cameras: hwPlan.cameras.map((c) => c.topic) }
+        ? {
+            config: hwPlan.config,
+            ...hwPlan.selection,
+            action_param: hwPlan.record.action_param,
+            cameras: hwPlan.cameras.map((c) => c.topic),
+            robot: hwPlan.robot && {
+              names: hwPlan.robot.names,
+              gripper: hwPlan.robot.gripper || undefined,
+              source: hwPlan.robot.source,
+              joint_pairs: hwPlan.robot.joint_pairs,
+            },
+          }
         : null,
     [hwPlan]
   );

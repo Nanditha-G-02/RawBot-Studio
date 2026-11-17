@@ -139,12 +139,10 @@ def test_follower_only_hand_guided_and_direct_control(world, hw):
     st = hw.setup(RT, selection={'action': 'gui', 'target': 'follower'})
     p = st['planning']
     assert p['selection']['target'] == 'follower'
-    assert not p['record']['available'] and 'direct control' in p['record']['reason']
+    assert not p['record']['available'] and 'following' in p['record']['reason']
     assert p['record']['action_param'] == 'leader'
-    # scripts and replays never drive the physical arm
-    st = hw.setup(RT, selection={'action': 'script'})
-    t = opts(st, 'targets')
-    assert not a['script']['available'] or not t['follower']['available']
+    # the simulated robot is the leader of the physical arm: it runs by itself
+    assert st['sim']['running'] and st['sim']['drive'] == 'manual'
 
 
 def test_simulation_only_works_without_any_arm(world, hw):
@@ -601,3 +599,77 @@ def test_follower_read_over_serial_is_published_for_ros(world, hw):
     hw.ros.pubs['/joint_states'] = ['/so101_bridge']
     st = hw.status(RT)
     assert 'publishes' not in st['arms']['follower'] and not hw.relay.topic
+
+
+
+# ------------------------------------------- simulated leader -> physical follower ---
+def test_simulated_leader_drives_the_physical_follower(world, hw, monkeypatch):
+    """Virtual teleoperation: GUI / keys / pad / script / replay move the simulated leader and
+    the physical follower follows it (jog_worker follow mode) - set up from the arm's pose."""
+    register(world, hw, ('follower',))
+    hw.setup(RT, mode='follower_only')
+    live(hw, leader=False)
+    st = hw.setup(RT, selection={'action': 'script', 'target': 'follower'})
+    p = st['planning']
+    assert p['selection'] == {'action': 'script', 'target': 'follower', 'observation': 'follower'}
+    assert st['sim']['running']
+    assert {c['id']: c['state'] for c in p['checks']}['mapping'] == 'ok'
+    assert 'following' in p['record']['reason']
+    lim = [{'name': n, 'min': -1.5, 'max': 1.5, 'speed': 0.5} for n in J]
+    prep = hw.jog_prepare(RT, {'names': J, 'limits': lim, 'follow': True})
+    assert prep['ok'], prep['errors']
+    assert prep['config']['follow'] == {'topic': '/rawbot/sim/joint_states',
+                                        'map': {n: n for n in J}}
+    started = {}
+
+    class Proc:
+        pid = 1
+
+        def poll(self):
+            return None
+    monkeypatch.setattr('subprocess.Popen', lambda *a, **k: started.setdefault('p', Proc()))
+    hw.sim_command(RT, {'command': 'targets', 'targets': {'shoulder_pan': 1.0}})
+    v = hw.jog_start(RT, {'names': J, 'limits': lim, 'follow': True}, prep['token'],
+                     {'area_clear': 1, 'estop_ready': 1, 'watching': 1})
+    assert v['follow'] and started
+    # the simulated leader took the arm's pose: switching following on cannot jump
+    assert hw.sim.pos == [0.1] * 6 and hw.sim.target == [0.1] * 6
+    hw.sim_command(RT, {'command': 'targets', 'targets': {'shoulder_pan': 1.0}})
+    hw.ros.publish('/joint_states', J, [0.2] * 6)            # the arm was moved meanwhile
+    hw.jog_command(v['id'], {'command': 'follow', 'on': True})
+    assert hw.sim.pos == [0.2] * 6                            # lined up again when switched on
+    import json as _json
+    ctl = _json.loads((hw.jog['dir'] / 'control.json').read_text())
+    assert ctl['follow']['on'] is True
+    st = hw.status(RT)
+    assert st['planning']['record']['available'], st['planning']['record']['reason']
+    assert st['planning']['record']['action_param'] == 'leader'   # its commands = the action
+    hw.jog_command(v['id'], {'command': 'stop'})
+    hw.jog = None
+
+
+def test_follow_needs_the_simulated_leader_joints(world, hw):
+    register(world, hw, ('follower',))
+    hw.setup(RT, mode='follower_only', selection={'action': 'gui', 'target': 'follower'})
+    live(hw, leader=False)
+    hw.setup(RT, joint_pairs={'gripper': 'no_such_joint'})  # mapped to a missing joint
+    lim = [{'name': n, 'min': -1.5, 'max': 1.5, 'speed': 0.5} for n in J]
+    prep = hw.jog_prepare(RT, {'names': J, 'limits': lim, 'follow': True})
+    assert not prep['ok'] and any('gripper' in e for e in prep['errors'])
+
+
+def test_mixed_robot_joint_pairs(world, hw):
+    """A leader whose joints are named differently drives the target through pairs."""
+    register(world, hw, ('leader',))
+    hw.setup(RT, mode='leader_sim')
+    names = ['j1', 'j2', 'j3', 'j4', 'j5', 'claw']
+    hw.ros.publish('/leader/joint_trajectory', names, [0.1, 0.2, 0.3, 0.4, 0.5, 0.6])
+    st = hw.status(RT)
+    assert {c['id']: c['state'] for c in st['planning']['checks']}['mapping'] == 'err'
+    st = hw.setup(RT, joint_pairs=dict(zip(J, names)))
+    ch = {c['id']: c for c in st['planning']['checks']}
+    assert ch['mapping']['state'] == 'ok' and ch['gripper']['state'] == 'ok'
+    for _ in range(30):
+        hw.sim.step(1 / 30)
+    assert hw.sim.pos[5] == pytest.approx(0.6) and hw.sim.pos[0] == pytest.approx(0.1)
+    assert st['planning']['record']['available'], st['planning']['record']['reason']

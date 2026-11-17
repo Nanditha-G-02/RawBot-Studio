@@ -93,11 +93,12 @@ class SimRobot:
 
     # ---- configuration ----------------------------------------------------------------
     def ensure(self, robot_type, run, topics, names=None, state_topic=None,
-               leader_sampler=None, leader_pub=False, limits=None):
+               leader_sampler=None, leader_pub=False, limits=None, pairs=None):
         """Called by the manager on every status: start / stop, joints, allowed topics.
         limits: the robot's joint limits (URDF), applied when the joints change."""
         with self.lock:
             self.default_limits = dict(limits or {})
+            self.pairs = dict(pairs or {})     # target joint -> leader joint (mixed robots)
             self.leader_sampler = leader_sampler if run else None
             self.leader_pub = bool(run and leader_pub and leader_sampler)
             if robot_type != self.robot_type:
@@ -208,6 +209,15 @@ class SimRobot:
                 self.script = self.replay = None
                 self.hold = {}
                 self.target = list(self.pos)
+            elif cmd == 'set_pose':
+                # line up with a physical arm (virtual teleoperation start): no motion
+                for k, v in (body.get('pose') or {}).items():
+                    if k in self.names:
+                        i = self.names.index(k)
+                        self.pos[i] = self.target[i] = self._clamp(i, float(v))
+                self.drive = 'manual'
+                self.hold = {}
+                self.script = self.replay = None
             elif cmd == 'capture_start':
                 self.rec = {'t0': _now(), 'samples': []}
             elif cmd == 'capture_cancel':
@@ -242,16 +252,18 @@ class SimRobot:
     def _follow_leader(self):
         """Joint mapping by name, joint-limit check, then the target. Stale input holds."""
         age, names, vals, extra = self.read_leader()
+        pairs = getattr(self, 'pairs', None) or {}
+        src = lambda n: pairs.get(n, n)      # noqa: E731 - target joint -> leader joint
         info = {'age_s': None if age is None else round(age, 3), 'names': list(names),
                 'values': [float(v) for v in vals], 'at_limit': [],
-                'missing': [n for n in self.names if n not in names],
+                'missing': [n for n in self.names if src(n) not in names], 'pairs': pairs,
                 'source': extra.get('source'), 'topic': extra.get('topic'),
                 'ticks': extra.get('ticks'), 'rate_hz': extra.get('rate_hz'),
                 'stale': age is None or age > LEADER_STALE_S}
         if not info['stale']:
             for i, nme in enumerate(self.names):
-                if nme in names:
-                    v = float(vals[names.index(nme)])
+                if src(nme) in names:
+                    v = float(vals[names.index(src(nme))])
                     c = self._clamp(i, v)
                     if abs(c - v) > 1e-9:
                         info['at_limit'].append(nme)

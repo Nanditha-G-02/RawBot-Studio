@@ -18,6 +18,11 @@ move request carries a timestamp and expires after 0.3 s). Before every publish:
     topic -> hold at the measured position
 Stop / emergency stop / end of session -> one hold command, then exit. Killing this process
 also ends all commands (the service does this on an emergency stop).
+
+Follow mode (``cfg['follow']``, virtual teleoperation): instead of one held joint, every joint
+moves towards the simulated leader's joint states (``follow.topic``, mapped by ``follow.map``
+target -> source) while the page has following switched on - with the same limits, speed and
+lead caps, stale-data, heartbeat and foreign-publisher holds. A stale leader holds.
 """
 
 import json
@@ -74,6 +79,20 @@ def run(cfg_path):
                                                                   ', '.join(others)))
         return 2
     br.subscribe(cfg['state_topic'], 'sensor_msgs/msg/JointState')
+    follow = cfg.get('follow') or None
+    if follow:
+        br.subscribe(follow['topic'], 'sensor_msgs/msg/JointState')
+        fmap = {n: (follow.get('map') or {}).get(n, n) for n in names}
+
+    def leader():
+        """Simulated leader positions per target joint, or None when stale / incomplete."""
+        hit = br.latest.get(follow['topic'])
+        if not hit or now() - hit[0] > stale_s:
+            return None
+        src = dict(zip(hit[1].get('name') or [], hit[1].get('position') or []))
+        if not all(fmap[n] in src for n in names):
+            return None
+        return {n: float(src[fmap[n]]) for n in names}
     br.advertise(cfg['command_topic'], 'trajectory_msgs/msg/JointTrajectory')
 
     def measured():
@@ -165,6 +184,43 @@ def run(cfg_path):
                 continue
             if st['phase'] == 'stale':
                 push(phase='ready', held_reason=None)
+            if follow:
+                on = bool(hb_ok and (ctl.get('follow') or {}).get('on'))
+                goal = leader() if on else None
+                if not on or goal is None:
+                    if target is not None:
+                        hold('paused' if not on else 'leader stale', m)
+                    push(measured=m, following=False,
+                         held_reason=None if not on else 'no fresh simulated leader')
+                    time.sleep(max(0.0, period - (now() - tick)))
+                    continue
+                if target is None:
+                    target = dict(m)
+                limited = []
+                for n in names:
+                    lo, hi = float(lim[n]['min']), float(lim[n]['max'])
+                    g = min(hi, max(lo, goal[n]))
+                    if g != goal[n]:
+                        limited.append(n)
+                    step = max(-speed[n] * period, min(speed[n] * period, g - target[n]))
+                    nxt = target[n] + step
+                    if abs(nxt - m[n]) <= lead[n]:
+                        target[n] = nxt
+                lagging = [n for n in names if abs(target[n] - m[n]) > lead[n]]
+                if lagging:
+                    lag_since = lag_since or tick
+                    if tick - lag_since > 1.0:
+                        hold('not following', m)
+                        push(phase='failed', error='%s does not follow the command. Check the '
+                             'arm and bridge.py.' % ', '.join(lagging))
+                        return 2
+                else:
+                    lag_since = None
+                publish(target)
+                push(phase='moving', moving='all', following=True, at_limit=limited[0] if
+                     limited else None, limited=limited, measured=m, target=dict(target))
+                time.sleep(max(0.0, period - (now() - tick)))
+                continue
             mv = ctl.get('move') or {}
             want = mv.get('joint') if (hb_ok and mv.get('dir') in (-1, 1) and
                                        tick - float(mv.get('t') or 0) <= move_ttl) else None

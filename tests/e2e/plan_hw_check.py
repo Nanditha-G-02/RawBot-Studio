@@ -254,7 +254,7 @@ with sync_playwright() as p:
     pick(page, 'action', 'keyboard')
     selection(page, 'keyboard|follower|follower')
     record(page, False)
-    expect(page.locator('[data-plan-record-reason]')).to_contain_text('direct control')
+    expect(page.locator('[data-plan-record-reason]')).to_contain_text('following')
     expect(page.locator('[data-jog-setup], [data-jog-unavailable]').first).to_be_visible(timeout=10000)
     shot(page, 'pl06_follower_only_keyboard')
     pick(page, 'action', 'hand_guided')
@@ -404,6 +404,64 @@ with sync_playwright() as p:
     page.locator('[data-robots-tab="hardware"]').click()
     page.locator('[data-action="disconnect-leader"]').click()
     expect(page.locator('[data-arm-card="leader"]')).to_have_attribute('data-arm-state', 'disconnected', timeout=10000)
+
+    # ------------------------------- P7 simulated leader -> physical follower (A3)
+    step('P7 Simulated leader drives the physical follower: follow, record, pause, end')
+    teleop(False, follower=True)                 # bridge.py with the follower, no teleop
+    world.hold('ttyACM1')
+    mode(page, 'follower_only')
+    wait_for(lambda: status()['arms']['follower']['state'] == 'connected', 20, 'follower on ROS')
+    panel(page)
+    pick(page, 'action', 'gui')
+    selection(page, 'gui|follower|follower')
+    record(page, False)
+    expect(page.locator('[data-plan-record-reason]')).to_contain_text('following')
+    expect(page.locator('[data-sim-sliders]')).to_be_visible(timeout=10000)
+    page.locator('[data-jog-setup="follow"] select').select_option(index=1)
+    expect(page.locator('[data-jog-limits]')).to_be_visible(timeout=120000)
+    page.locator('[data-action="jog-review"]').click()
+    for k in ('area_clear', 'estop_ready', 'watching'):
+        page.locator(f'[data-jog-check="{k}"]').check()
+    page.locator('[data-action="jog-start"]').click()
+    page.wait_for_selector('[data-follow]', timeout=15000)
+    jog = wait_for(lambda: (status()['sessions'].get('jog') or {}).get('phase') == 'ready'
+                   and status()['sessions']['jog'], 15, 'follow session ready')
+    page.locator('[data-action="follow-toggle"]').click()
+    expect(page.locator('[data-follow]')).to_have_attribute('data-follow', 'on', timeout=10000)
+    # switching on lined the simulated leader up with the arm: no jump
+    m0 = status()['sessions']['jog']['measured']['shoulder_pan']
+    assert abs(sim_pos('shoulder_pan') - m0) < 0.1, 'simulated leader not lined up'
+    goal = m0 + (0.12 if m0 < 0 else -0.12)
+    urllib.request.urlopen(urllib.request.Request(
+        'http://127.0.0.1:8766/hardware/sim?robot_type=' + RT,
+        data=json.dumps({'command': 'targets', 'targets': {'shoulder_pan': goal}}).encode(),
+        headers={'Content-Type': 'application/json'}), timeout=10)
+    wait_for(lambda: abs(status()['sessions']['jog']['measured']['shoulder_pan'] - goal) < 0.03,
+             20, 'physical follower follows the simulated leader')
+    record(page, True)
+    expect(page.locator('[data-plan-config]')).to_have_attribute('data-plan-config', 'sim_leader')
+    expect(page.locator('[data-plan-sim-twin]')).to_have_count(0)
+    shot(page, 'pl17_virtual_teleop')
+    nav(page, 'Record')
+    expect(page.locator('[data-record-setup="gui|follower"]')).to_be_visible(timeout=10000)
+    page.get_by_role('tab', name='Plan mode').click()
+    expect(page.locator('[data-control="Start"]')).to_be_enabled(timeout=10000)
+    page.locator('[data-control="Start"]').click()
+    expect(page.get_by_text(re.compile(r'E\d+ saved and validated'))).to_be_visible(timeout=30000)
+    st = planning('record.state', {'plan_id': pid})
+    got = [a.get('setup') for e in st['progress']['episodes'].values()
+           for a in e.get('attempts', []) if a.get('setup')]
+    assert got[-1]['action'] == 'gui' and got[-1]['target'] == 'follower', got
+    assert got[-1]['action_param'] == 'leader' and got[-1]['robot']['names'], got
+    meta = Path(planning('meta', {})['dataset_root']) / st['progress']['dataset_id'] / 'meta'
+    lines = (meta / 'rawbot_recordings.jsonl').read_text().splitlines()
+    assert json.loads(lines[-1])['setup']['action'] == 'gui'
+    panel(page)
+    page.locator('[data-action="follow-toggle"]').click()
+    expect(page.locator('[data-follow]')).to_have_attribute('data-follow', 'off', timeout=10000)
+    page.locator('[data-action="jog-stop"]').click()
+    expect(page.locator('[data-follow]')).to_have_count(0, timeout=15000)
+    pick(page, 'action', 'hand_guided')
 
     # ------------------------------------------------------------------ restore
     world.hold('ttyACM0')

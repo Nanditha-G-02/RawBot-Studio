@@ -2,6 +2,15 @@
 
 ## 2.0.0, renamed (2026-11-13)
 
+* **Simulated leader → physical follower.** GUI, keys, pad, script or replay move the simulated
+  robot and the physical follower follows it (direct-control follow mode: reviewed limits and
+  speed, line-up before moving, stale / page / publisher holds, *Stop all*); recorded like
+  teleoperation. Planning names it *Simulated Leader + Physical Follower*.
+* **Mixed robots:** pick the leader joint for a target joint with another name; used by the
+  simulated follower, follow mode and the mapping check.
+* **Dataset metadata:** `meta/rawbot_recordings.jsonl` (how each episode was recorded) and
+  `meta/rawbot_robot.json` (robot configuration) in every dataset RawBot Studio records.
+
 * **Physical follower detection.** `./scripts/hw-doctor.sh` walks USB → permission → port holders
   (incl. ModemManager / brltty) → LeRobot motor scan (read-only) → training service → robot
   runtime / ROS topics and names the first failing link. Detect now gives every port a reason;

@@ -31,6 +31,7 @@ CONFIGS = {
     'leader_follower': 'Leader + Follower',
     'leader_only': 'Leader Only',
     'leader_sim': 'Physical Leader + Simulated Follower',
+    'sim_leader': 'Simulated Leader + Physical Follower',
     'follower_only': 'Follower Only',
     'simulation': 'Simulation Only',
     'physical_sim': 'Physical + Simulated',
@@ -47,6 +48,9 @@ ACTIONS = [
 TARGETS = [('follower', 'Physical follower'), ('sim', 'Simulated robot')]
 OBSERVATIONS = [('follower', 'Follower joint states'), ('sim', 'Simulated joint states')]
 MANUAL = ('gui', 'keyboard', 'gamepad')
+# inputs that move the simulated robot; with the physical follower as the target the simulated
+# robot is the leader and the follower follows it (virtual teleoperation, jog_worker follow mode)
+SIM_LEADS = MANUAL + ('script', 'replay')
 DEFAULT_ORDER = {
     'leader_follower': ('leader', 'follower', 'follower'),
     'leader_only': ('leader', 'sim', 'sim'),
@@ -112,9 +116,6 @@ def options(mode, arms, caps, sim, selection=None, cameras=None, extra=None, rob
                 return ('Hand guiding moves the physical follower.', 'physical only')
             return None
         # physical follower
-        if action in ('script', 'replay'):
-            return ('Scripts and replays drive the simulated robot only (a physical arm moves '
-                    'only under supervised control).', 'simulation only')
         if 'follower' not in used:
             if mode == 'leader_sim':
                 return ('This configuration has no physical follower: the leader drives the '
@@ -127,6 +128,8 @@ def options(mode, arms, caps, sim, selection=None, cameras=None, extra=None, rob
         if action == 'hand_guided':
             c = caps.get('hand_guided_record') or {}
             return None if c.get('available') else (c.get('reason') or '', 'needs Follower Only')
+        if action in SIM_LEADS and not robot['sim']['available']:
+            return (robot['sim']['reason'], robot['sim']['short'])
         c = caps.get('follower_control') or {}
         if c.get('available') or (extra.get('jog_running') and fr):
             return None
@@ -195,8 +198,8 @@ def options(mode, arms, caps, sim, selection=None, cameras=None, extra=None, rob
     if not reason and tg == 'follower' and a == 'leader':
         c = caps.get('record') or {}
         reason = '' if c.get('available') else c.get('reason') or 'Recording is not available.'
-    if not reason and tg == 'follower' and a in MANUAL and not extra.get('jog_running'):
-        reason = 'Start direct control first: its commands are the recorded action.'
+    if not reason and tg == 'follower' and a in SIM_LEADS and not extra.get('jog_running'):
+        reason = 'Start following first: the arm follows the simulated leader.'
     if not reason and ob == 'sim' and not sim.get('state_topic'):
         reason = 'The simulated robot is not publishing the follower state topic yet.'
     if not reason and extra.get('calibration_active'):
@@ -250,12 +253,14 @@ def options(mode, arms, caps, sim, selection=None, cameras=None, extra=None, rob
     checks = [check('robot', '%d joints%s' % (robot['dof'], ' · gripper' if robot['gripper']
                                                else ''), robot['dof'] > 0,
                     robot['source'] or 'joints unknown')]
-    if a == 'leader':
+    pairs = extra.get('pairs') or {}
+    if a == 'leader' or (a in SIM_LEADS and tg == 'follower'):
         li = sim.get('leader_in') or {}
-        src = li.get('names') or list((L.get('joints') or {}).keys())
+        src = (li.get('names') or list((L.get('joints') or {}).keys())) if a == 'leader' \
+            else list(sim.get('names') or [])
         tgt = robot['names'] if tg == 'sim' else list((F.get('joints') or {}).keys())
         if src and tgt:
-            m = robotcaps.mapping(src, tgt, robot['gripper'])
+            m = robotcaps.mapping(src, tgt, robot['gripper'], pairs)
             checks.append(check('mapping', 'Mapping %d/%d' % (m['matched'], m['total']),
                                 not m['missing'], 'missing on the leader: %s' % ', '.join(
                                     m['missing']) if m['missing'] else 'by joint name'))
@@ -264,7 +269,8 @@ def options(mode, arms, caps, sim, selection=None, cameras=None, extra=None, rob
                                     robot['gripper'] if m['gripper'] else
                                     'the leader has no %s' % robot['gripper']))
             if m['missing'] and not reason:
-                reason = 'The leader has no joint %s of the %s.' % (
+                reason = 'The %s has no joint %s of the %s.' % (
+                    'leader' if a == 'leader' else 'simulated leader',
                     ', '.join(m['missing']), 'simulated follower' if tg == 'sim' else 'follower')
         if tg == 'sim' and li:
             checks.append(check('limits', 'Limits', not li.get('at_limit'),
@@ -281,6 +287,8 @@ def options(mode, arms, caps, sim, selection=None, cameras=None, extra=None, rob
                             if extra.get('leader_state_supported') is False else 'not checked yet',
                             warn=extra.get('leader_state_supported') is None))
 
+    if tg == 'follower' and a in SIM_LEADS and sim_on:
+        config = 'sim_leader'        # the simulated robot leads the physical follower
     return {
         'config': config, 'config_label': CONFIGS[config], 'auto': bool(auto), 'robot': robot,
         'checks': checks, 'robots': robots,
@@ -296,6 +304,10 @@ def sim_drive(sel):
     """What drives the simulated robot for a selection; None = the operator (manual, script,
     replay)."""
     if sel.get('target') == 'follower':
+        if sel.get('action') in SIM_LEADS:
+            # the simulated robot is the leader of the physical follower: the operator drives
+            # it (a script or replay keeps running until another input is chosen)
+            return 'manual' if sel.get('action') in MANUAL else None
         return 'follower'          # physical-to-simulation mirror
     if sel.get('action') == 'leader':
         return 'leader'

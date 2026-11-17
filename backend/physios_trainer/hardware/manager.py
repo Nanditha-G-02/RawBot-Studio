@@ -36,7 +36,7 @@ from physios_trainer.hardware import ports as portmod
 from physios_trainer.hardware import robotcaps
 from physios_trainer.hardware.registry import MODES, ROLES, Registry, motor_spec
 from physios_trainer.hardware.relay import StateRelay
-from physios_trainer.hardware.simbot import SimRobot
+from physios_trainer.hardware.simbot import SIM_TOPIC, SimRobot
 from physios_trainer.util import atomic_write_json, now_iso, read_json
 
 HERE = Path(__file__).resolve().parent
@@ -357,11 +357,15 @@ class Hardware:
 
     # ---- setup ------------------------------------------------------------------------
     def setup(self, robot_type, mode=None, topics=None, env=None, source='operator',
-              cameras=None, joints=None, sim_twin=None, selection=None, joint_map=None):
+              cameras=None, joints=None, sim_twin=None, selection=None, joint_map=None,
+              joint_pairs=None):
         cur = self.reg.setup(robot_type)
         kw = {}
         if joint_map is not None:
             kw['joint_map'] = clean_joint_map(joint_map)
+        if joint_pairs is not None:
+            kw['joint_pairs'] = {str(k)[:60]: str(v)[:60] for k, v in (joint_pairs or {}).items()
+                                 if isinstance(v, str) and v and v != k}
         if cameras is not None:
             kw['cameras'] = {str(k)[:40]: t for k, t in (cameras or {}).items()
                              if isinstance(t, str) and t.startswith('/') and len(t) < 200}
@@ -722,7 +726,9 @@ class Hardware:
         auto = self.auto_leader_sim(setup, arms)
         mode = 'leader_sim' if auto else setup['mode']
         ft = setup['topics'].get('follower')
-        run = mode in ('simulation', 'leader_sim') or bool(setup.get('sim_twin'))
+        sel = setup.get('selection') or {}
+        run = mode in ('simulation', 'leader_sim') or bool(setup.get('sim_twin')) or (
+            sel.get('target') == 'follower' and sel.get('action') in planmod.SIM_LEADS)
         own_reason = ''
         if not ft:
             own_reason = 'The follower state topic of the robot configuration is not known yet.'
@@ -755,6 +761,7 @@ class Hardware:
         rc = robotcaps.capabilities(
             robot_type, names, robotcaps.custom_profile(self.robots_dir, robot_type),
             serial=bool(motor_spec(robot_type)), topics=setup['topics'])
+        rc['joint_pairs'] = setup.get('joint_pairs') or {}
         # the leader read by RawBot Studio itself (serial session): converted to radians and
         # published for the recorder; with bridge.py the leader topic is used as before
         L = arms['leader']
@@ -764,7 +771,7 @@ class Hardware:
                         names=rc['names'] or names,
                         state_topic=ft if (run and not own_reason) else None,
                         leader_sampler=sampler, leader_pub=serial_leader,
-                        limits=rc['limits'])
+                        limits=rc['limits'], pairs=setup.get('joint_pairs') or {})
         sim = self.sim.view()
         sim.update(can_own_state=not own_reason, own_reason=own_reason, twin=bool(
             setup.get('sim_twin')), joint_map=setup.get('joint_map') or {})
@@ -779,6 +786,7 @@ class Hardware:
             'jog_running': extra.get('jog_active'), 'compare': compare,
             'calibration_active': extra.get('calibration_active'),
             'follower_relay': extra.get('follower_relay'),
+            'pairs': setup.get('joint_pairs') or {},
             'leader_state_supported': self.action_source_supported.get(
                 (robot_type, 'leader_state'))}, robot=rc, auto=auto)
         # what drives the simulated robot follows the selection: the leader arm, a mirror of
@@ -1308,6 +1316,17 @@ class Hardware:
                'command_topic': setup['topics'].get('leader'), 'names': names,
                'limits': limits, 'rosbridge_url': self.ros.url,
                'max_duration_s': 900, 'rate_hz': 30}
+        if req.get('follow'):
+            # virtual teleoperation: the physical follower follows the simulated leader
+            sv = self.sim.view()
+            if not sv['running']:
+                errors.append('The simulated leader is not running.')
+            pairs = setup.get('joint_pairs') or {}
+            fmap = {n: pairs.get(n, n) for n in names}
+            miss = [n for n in names if fmap[n] not in sv['names']]
+            if miss:
+                errors.append('The simulated leader has no joint for %s.' % ', '.join(miss))
+            cfg['follow'] = {'topic': SIM_TOPIC, 'map': fmap}
         token = _token(cfg)
         return {'ok': not errors, 'errors': errors, 'config': cfg, 'token': token,
                 'expires_in_s': 120}
@@ -1323,6 +1342,19 @@ class Hardware:
             raise HardwareError('The jog settings changed since you reviewed them.', 409)
         if self.jog and self.jog['proc'].poll() is None:
             raise HardwareError('A jog session is already running.', 409)
+        if prep['config'].get('follow'):
+            # start where the arm is: the simulated leader takes the follower's pose, so
+            # switching following on never makes the arm jump
+            age, fnames, fvals = self.ros.sample(prep['config']['state_topic'])
+            if age is None or age > 1.0:
+                raise HardwareError('No fresh follower joint states to line the simulated '
+                                    'leader up with.', 409)
+            fmap = prep['config']['follow']['map']
+            pose = {fmap[n]: v for n, v in zip(fnames, fvals) if n in fmap}
+            try:
+                self.sim.command({'command': 'set_pose', 'pose': pose})
+            except ValueError as e:
+                raise HardwareError(str(e), 409)
         jid = 'jog-%s' % uuid.uuid4().hex[:6]
         d = self.sess_dir / jid
         d.mkdir(parents=True)
@@ -1339,6 +1371,7 @@ class Hardware:
         finally:
             log.close()
         self.jog = {'id': jid, 'proc': proc, 'dir': d, 'robot_type': robot_type,
+                    'follow': bool(prep['config'].get('follow')),
                     'started': time.time()}
         self._event(robot_type, 'jog', 'Direct control session started.', notify=False)
         return self._jog_view()
@@ -1363,6 +1396,22 @@ class Hardware:
             d = int(body.get('dir') or 0)
             ctl['move'] = {'joint': body.get('joint'), 'dir': d if d in (-1, 1) else 0,
                            't': time.time()}
+        elif cmd == 'follow':
+            on = bool(body.get('on'))
+            if on and not (ctl.get('follow') or {}).get('on') and j.get('follow'):
+                # switching on: the simulated leader starts from where the arm is now, so the
+                # arm never jumps to an old simulated pose
+                cfg = read_json(j['dir'] / 'config.json') or {}
+                age, fnames, fvals = self.ros.sample(cfg.get('state_topic'))
+                if age is None or age > 1.0:
+                    raise HardwareError('No fresh follower joint states.', 409)
+                fmap = (cfg.get('follow') or {}).get('map') or {}
+                try:
+                    self.sim.command({'command': 'set_pose', 'pose': {
+                        fmap[n]: v for n, v in zip(fnames, fvals) if n in fmap}})
+                except ValueError as e:
+                    raise HardwareError(str(e), 409)
+            ctl['follow'] = {'on': on, 't': time.time()}
         elif cmd in ('release', 'heartbeat'):
             if cmd == 'release':
                 ctl['move'] = {'joint': None, 'dir': 0, 't': time.time()}
@@ -1389,7 +1438,11 @@ class Hardware:
                 'end_reason': st.get('end_reason'), 'measured': st.get('measured'),
                 'target': st.get('target'), 'moving': st.get('moving'),
                 'at_limit': st.get('at_limit'), 'held_reason': st.get('held_reason'),
-                'commands_sent': st.get('commands_sent'), 'names': st.get('names')}
+                'commands_sent': st.get('commands_sent'), 'names': st.get('names'),
+                'follow': bool(j.get('follow')), 'following': bool(st.get('following')),
+                'follow_on': bool(((read_json(j['dir'] / 'control.json') or {}).get('follow')
+                                   or {}).get('on')) if j.get('follow') else False,
+                'limited': st.get('limited') or []}
 
     def _kill_later(self, proc, wait=0.5):
         time.sleep(wait)

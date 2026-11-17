@@ -201,7 +201,7 @@ function LeaderSync({ robotType, sim, pos, compact, send }) {
       .catch(() => {});
   }, []);
   const lv = (n) => {
-    const i = lead.names.indexOf(n);
+    const i = lead.names.indexOf((li.pairs || {})[n] || n);
     return i >= 0 ? Number(lead.positions[i]) : undefined;
   };
   const ticks = (n) => {
@@ -282,6 +282,7 @@ function LeaderSync({ robotType, sim, pos, compact, send }) {
           })}
         </tbody>
       </table>
+      <JointPairs robotType={robotType} li={li} dispatch={dispatch} />
       {!compact && (
         <div className="grid gap-2 sm:grid-cols-[auto_1fr] sm:items-center text-[12px]">
           <span className="label">Joint limits</span>
@@ -312,6 +313,39 @@ function LeaderSync({ robotType, sim, pos, compact, send }) {
           </button>
         </details>
       )}
+    </div>
+  );
+}
+
+// mixed robots: a target joint with no same-named leader joint takes one picked here. Shown
+// only when something is unmatched or paired.
+function JointPairs({ robotType, li, dispatch }) {
+  const pairs = li.pairs || {};
+  const rows = [...new Set([...(li.missing || []), ...Object.keys(pairs)])];
+  if (!rows.length || !(li.names || []).length) return null;
+  const save = async (target, source) => {
+    const next = { ...pairs };
+    if (source) next[target] = source;
+    else delete next[target];
+    try {
+      dispatch(setHardwareStatus(await hwPlanning(robotType, { joint_pairs: next })));
+    } catch (e) {
+      toast.error(e.message);
+    }
+  };
+  return (
+    <div className="grid gap-1 text-[12px]" data-joint-pairs>
+      {rows.map((t) => (
+        <label key={t} className="grid grid-cols-[110px_auto_1fr] items-center gap-2" data-pair={t}>
+          <span className={clsx('font-mono truncate', !pairs[t] && 'text-signal-warn')}>{t}</span>
+          <span className="text-ink-4">←</span>
+          <Select
+            value={pairs[t] || ''}
+            onChange={(v) => save(t, v)}
+            options={[{ value: '', label: pairs[t] ? 'same name' : 'pick a leader joint' }, ...li.names.map((n) => ({ value: n, label: n }))]}
+          />
+        </label>
+      ))}
     </div>
   );
 }

@@ -345,3 +345,28 @@ def test_take_keeps_how_it_was_recorded(env):
     record_one(svc, tmp, plan, 'E002')
     e = svc.handle('record.state', {'plan_id': plan['id']})['progress']['episodes']['E002']
     assert 'setup' not in e['attempts'][-1]
+
+
+
+def test_dataset_meta_keeps_how_each_episode_was_recorded(env):
+    """meta/rawbot_recordings.jsonl gets one line per saved take; meta/rawbot_robot.json the
+    robot configuration. LeRobot's own files are untouched."""
+    import json as _json
+    svc, _, tmp = env
+    plan = approved_plan(svc, n=2)
+    setup = {'config': 'leader_sim', 'action': 'leader', 'target': 'sim', 'observation': 'sim',
+             'action_param': 'leader_state', 'cameras': ['/cam'],
+             'robot': {'names': ['a', 'b'], 'gripper': 'b', 'source': 'robot configuration',
+                       'joint_pairs': {'b': 'claw'}, 'junk': 1}}
+    idx = record_one(svc, tmp, plan, 'E001', setup=setup)
+    ds = svc.handle('record.state', {'plan_id': plan['id']})['progress']['dataset_id']
+    meta = svc.dataset_root / ds / 'meta'
+    lines = [_json.loads(x) for x in (meta / 'rawbot_recordings.jsonl').read_text().splitlines()]
+    assert lines[-1]['episode_index'] == idx and lines[-1]['episode_id'] == 'E001'
+    assert lines[-1]['setup']['robot'] == {'names': ['a', 'b'], 'gripper': 'b',
+                                           'source': 'robot configuration',
+                                           'joint_pairs': {'b': 'claw'}}
+    assert lines[-1]['format'] == 'rawbot-studio/recording/v1'
+    robot = _json.loads((meta / 'rawbot_robot.json').read_text())
+    assert robot['format'] == 'rawbot-studio/robot/v1'
+    assert (meta / 'info.json').exists()

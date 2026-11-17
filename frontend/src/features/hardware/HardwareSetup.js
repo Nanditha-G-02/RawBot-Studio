@@ -595,9 +595,13 @@ const JOG_CHECK = [
 
 // input: 'gui' (hold the ± buttons, the original), 'keyboard' or 'gamepad' (the held key or
 // stick picks the joint and direction; still one joint at a time, only while held)
-export function JogPanel({ robotType, status, cap, input = 'gui' }) {
+// follow: the physical follower follows the simulated leader (virtual teleoperation) instead
+// of one held joint - same review, limits, checks and holds
+export function JogPanel({ robotType, status, cap, input = 'gui', follow = false }) {
   const { call } = usePlanningService();
-  const [names, setNames] = useState([]);
+  const [profileNames, setNames] = useState([]);
+  // the robot server's joint order; else the joints the hardware status knows (robotcaps)
+  const names = profileNames.length ? profileNames : status.planning?.robot?.names || [];
   const [limits, setLimits] = useState([]);
   const [datasets, setDatasets] = useState([]);
   const [ds, setDs] = useState('');
@@ -651,14 +655,14 @@ export function JogPanel({ robotType, status, cap, input = 'gui' }) {
   };
   const review = async () => {
     try {
-      setPrep(await api.jogPrepare(robotType, { names, limits }));
+      setPrep(await api.jogPrepare(robotType, { names, limits, follow }));
     } catch (e) {
       toast.error(e.message);
     }
   };
   const start = async () => {
     try {
-      await api.jogStart(robotType, { names, limits }, prep.token, checks);
+      await api.jogStart(robotType, { names, limits, follow }, prep.token, checks);
       setChecks({});
       setPrep(null);
       refreshHardware();
@@ -686,21 +690,27 @@ export function JogPanel({ robotType, status, cap, input = 'gui' }) {
     },
   });
 
+  const title = follow ? 'Follow the simulated leader' : 'Direct robot control (follower jog)';
   if (!cap.available && !live) {
     return (
-      <Sheet title="Direct robot control (follower jog)" code="J">
+      <Sheet title={title} code="J">
         <p className="text-[12.5px] text-ink-3" data-jog-unavailable>{cap.reason}</p>
       </Sheet>
     );
   }
   return (
-    <Sheet title="Direct robot control (follower jog)" code="J" soft={live}>
+    <Sheet title={title} code="J" soft={live}>
       {!live ? (
-        <div className="space-y-3" data-jog-setup>
+        <div className="space-y-3" data-jog-setup={follow ? 'follow' : 'jog'}>
           <Callout tone="warn" title="This moves the real follower">
-            One joint moves at a time, only while you hold its button, at the speed you review here, inside the limits below. Commands go
+            {follow ? (
+              <>The follower moves to the simulated leader, inside the limits and speed below. A closed page, a stale leader or joint states, or
+              another program commanding the arm hold it in place.</>
+            ) : (
+              <>One joint moves at a time, only while you hold its button, at the speed you review here, inside the limits below. Commands go
             through bridge.py on {status.topics?.leader}. Releasing the button, a closed page, stale joint states or another node commanding
-            the arm hold it in place.
+            the arm hold it in place.</>
+            )}
           </Callout>
           <div className="grid gap-3 md:grid-cols-[minmax(0,320px)_1fr] items-end">
             <Field label="Limits from a recorded dataset" hint="The joint envelope of your demonstrations (as for policy rollouts).">
@@ -764,11 +774,12 @@ export function JogPanel({ robotType, status, cap, input = 'gui' }) {
             </div>
           )}
           <div className="flex items-center gap-3 flex-wrap">
-            <StatusDot tone={session.phase === 'moving' ? 'warn' : session.phase === 'stale' ? 'err' : 'ok'} pulse={session.phase === 'moving'} label={session.phase === 'moving' ? `Moving ${session.moving}` : session.phase === 'stale' ? 'Holding - no fresh joint states' : 'Holding position'} />
+            {!session.follow && <StatusDot tone={session.phase === 'moving' ? 'warn' : session.phase === 'stale' ? 'err' : 'ok'} pulse={session.phase === 'moving'} label={session.phase === 'moving' ? `Moving ${session.moving}` : session.phase === 'stale' ? 'Holding - no fresh joint states' : 'Holding position'} />}
             <span className="text-[11.5px] text-ink-3">{session.commands_sent || 0} commands sent</span>
             <button className="btn btn-sm ml-auto" onClick={() => api.jogCommand(session.id, { command: 'stop' }).then(refreshHardware)} data-action="jog-stop">End session</button>
           </div>
-          <div className="grid gap-1.5 md:grid-cols-2">
+          {session.follow && <FollowLive session={session} names={session.names || names} />}
+          <div className={session.follow ? 'hidden' : 'grid gap-1.5 md:grid-cols-2'}>
             {(session.names || names).map((n) => (
               <div key={n} className="flex items-center gap-2 rounded-xl bg-paper px-2 py-1.5" data-jog-joint={n}>
                 <button
@@ -806,6 +817,45 @@ export function JogPanel({ robotType, status, cap, input = 'gui' }) {
         <Callout tone={session.error ? 'err' : 'info'} className="mt-3">{session.error || session.end_reason}</Callout>
       )}
     </Sheet>
+  );
+}
+
+// the physical follower following the simulated leader: on / pause and where each joint is
+function FollowLive({ session, names }) {
+  // the session says whether following is on (a page that comes back sees the real state)
+  const [mine, setMine] = useState(null);
+  const on = mine === null ? !!session.follow_on : mine;
+  useEffect(() => {
+    if (mine !== null && mine === !!session.follow_on) setMine(null);
+  }, [mine, session.follow_on]);
+  const toggle = () => {
+    const v = !on;
+    setMine(v);
+    api.jogCommand(session.id, { command: 'follow', on: v }).catch((e) => toast.error(e.message));
+  };
+  const lim = new Set(session.limited || []);
+  return (
+    <div className="space-y-2" data-follow={session.following ? 'on' : 'off'}>
+      <div className="flex items-center gap-3">
+        <button className={on ? 'btn btn-sm' : 'btn-primary btn-sm'} onClick={toggle} data-action="follow-toggle">
+          {on ? '❚❚ Pause' : '▶ Follow'}
+        </button>
+        <StatusDot
+          tone={session.following ? 'warn' : on ? 'err' : 'idle'}
+          pulse={session.following}
+          label={session.following ? 'Following the simulated leader' : on ? session.held_reason || 'Holding' : 'Paused'}
+        />
+      </div>
+      <div className="grid grid-cols-[1fr_auto_auto] gap-x-4 gap-y-0.5 font-mono text-[11.5px]">
+        {names.map((n) => (
+          <React.Fragment key={n}>
+            <span className="truncate text-ink-3">{n}</span>
+            <span className="tabular-nums">{fmt(session.measured?.[n])}</span>
+            <span className={clsx('tabular-nums', lim.has(n) ? 'text-signal-warn' : 'text-ink-3')}>{session.target?.[n] !== undefined ? `→ ${fmt(session.target[n])}` : ''}</span>
+          </React.Fragment>
+        ))}
+      </div>
+    </div>
   );
 }
 

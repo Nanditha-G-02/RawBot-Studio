@@ -113,11 +113,15 @@ def capabilities(robot_type, joint_names=None, custom=None, serial=False, topics
     }
 
 
-def mapping(source_names, target_names, gripper=None):
-    """How a source (leader) maps onto a target by joint name."""
+def mapping(source_names, target_names, gripper=None, pairs=None):
+    """How a source (leader) maps onto a target: by joint name, or by the operator's pairs
+    (target joint -> source joint) for robots whose joints are named differently."""
     src, tgt = list(source_names or []), list(target_names or [])
-    matched = [n for n in tgt if n in src]
+    pairs = pairs or {}
+    via = {n: pairs.get(n, n) for n in tgt}
+    matched = [n for n in tgt if via[n] in src]
     return {'matched': len(matched), 'total': len(tgt),
-            'missing': [n for n in tgt if n not in src],
-            'extra': [n for n in src if n not in tgt],
-            'gripper': None if not gripper else (gripper in src)}
+            'missing': [n for n in tgt if via[n] not in src],
+            'extra': [n for n in src if n not in via.values()],
+            'gripper': None if not gripper else (gripper in tgt and via[gripper] in src or
+                                                 gripper in src)}

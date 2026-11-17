@@ -171,7 +171,8 @@ def make_handler(svc):
                 return hw.setup(rt, mode=b.get('mode'), topics=b.get('topics'),
                                 env=b.get('env'), cameras=b.get('cameras'),
                                 joints=b.get('joints'), sim_twin=b.get('sim_twin'),
-                                selection=b.get('selection'), joint_map=b.get('joint_map'))
+                                selection=b.get('selection'), joint_map=b.get('joint_map'),
+                                joint_pairs=b.get('joint_pairs'))
             if m == 'POST' and p == ['sim']:
                 return hw.sim_command(rt, b)
             if m == 'POST' and p == ['action-source']:
