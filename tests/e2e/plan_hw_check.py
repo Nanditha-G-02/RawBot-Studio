@@ -15,6 +15,7 @@ script, replay, trajectory capture, a plan episode recorded with its setup), bot
 
 import asyncio
 import json
+import math
 import os
 import re
 import signal
@@ -356,12 +357,62 @@ with sync_playwright() as p:
     shot(page, 'pl13_planning_simulation_dark')
     page.locator('[data-theme-option="light"]').click()
 
+    # ------------------------------------- P6 physical leader + simulated follower
+    step('P6 Physical Leader + Simulated Follower: one arm over serial drives the simulated follower and is recorded')
+    world.plug('ttyACM0', serial='5A46085090', sweep_on_calibrate=True)   # free port, no bridge.py
+    mode(page, 'leader_sim')
+    nav(page, 'Robots')
+    page.locator('[data-robots-tab="hardware"]').click()
+    page.wait_for_selector('[data-hardware-setup]')
+    expect(page.locator('[data-arm-card="follower"]')).to_have_attribute('data-arm-state', 'unused', timeout=10000)
+    page.locator('[data-action="connect-leader"]').click()
+    expect(page.locator('[data-arm-card="leader"]')).to_have_attribute('data-arm-state', 'connected', timeout=20000)
+    assert status()['arms']['leader']['source'] == 'serial'
+    panel(page)
+    expect(page.locator('[data-plan-config]')).to_have_attribute('data-plan-config', 'leader_sim', timeout=12000)
+    selection(page, 'leader|sim|sim')
+    expect(page.locator('[data-plan-robot="follower"]')).to_have_count(0)        # no physical follower
+    expect(page.locator('[data-plan-robot="sim"]')).to_contain_text('Simulated follower')
+    expect(page.locator('[data-plan-sim-twin]')).to_have_count(0)
+    option(page, 'target', 'follower', False)
+    expect(page.locator('[data-leader-sync]')).to_have_attribute('data-leader-sync', 'live', timeout=12000)
+    world.set('ttyACM0', actual={'1': 3072, '2': 2048, '3': 2048, '4': 2048, '5': 2048, '6': 2560})
+    wait_for(lambda: abs(sim_pos('shoulder_pan') - math.pi / 2) < 0.01, what='simulated follower follows the leader')
+    wait_for(lambda: abs(sim_pos('gripper') - math.pi / 4) < 0.01, what='gripper follows')
+    expect(page.locator('[data-sync-joint="shoulder_pan"]')).to_contain_text('1.571', timeout=10000)
+    record(page, True)
+    assert status()['planning']['record']['action_param'] == 'leader_state'
+    shot(page, 'pl14_leader_sim')
+    nav(page, 'Record')
+    expect(page.locator('[data-record-setup="leader|sim"]')).to_be_visible(timeout=10000)
+    expect(page.locator('[data-leader-sync]')).to_be_visible()
+    expect(page.locator('[data-control="Start"]')).to_be_enabled(timeout=10000)
+    shot(page, 'pl15_record_leader_sim')
+    page.locator('[data-control="Start"]').click()
+    expect(page.get_by_text(re.compile(r'E\d+ saved and validated'))).to_be_visible(timeout=30000)
+    st = planning('record.state', {'plan_id': pid})
+    got = [a.get('setup') for e in st['progress']['episodes'].values()
+           for a in e.get('attempts', []) if a.get('setup')]
+    assert got[-1]['config'] == 'leader_sim' and got[-1]['action_param'] == 'leader_state', got
+    page.locator('[data-theme-option="dark"]').click()
+    panel(page)
+    shot(page, 'pl16_leader_sim_dark')
+    page.locator('[data-theme-option="light"]').click()
+    nav(page, 'Robots')
+    page.locator('[data-robots-tab="hardware"]').click()
+    page.locator('[data-action="disconnect-leader"]').click()
+    expect(page.locator('[data-arm-card="leader"]')).to_have_attribute('data-arm-state', 'disconnected', timeout=10000)
+
     # ------------------------------------------------------------------ restore
-    world.plug('ttyACM0', serial='5A46085090', sweep_on_calibrate=True)
     world.hold('ttyACM0')
     world.hold('ttyACM1')
     teleop(True, follower=True)
     mode(page, 'leader_follower')
+    nav(page, 'Robots')
+    page.locator('[data-robots-tab="hardware"]').click()
+    page.wait_for_timeout(2500)
+    page.locator('[data-action="connect-leader"]').click()
+    wait_for(lambda: status()['arms']['leader']['state'] == 'connected', 20, 'leader back')
     panel(page)
     twin(page, False)
     selection(page, 'leader|follower|follower')

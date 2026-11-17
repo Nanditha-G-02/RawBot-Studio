@@ -29,6 +29,7 @@ from physios_trainer.hardware.registry import MODES
 CONFIGS = {
     'leader_follower': 'Leader + Follower',
     'leader_only': 'Leader Only',
+    'leader_sim': 'Physical Leader + Simulated Follower',
     'follower_only': 'Follower Only',
     'simulation': 'Simulation Only',
     'physical_sim': 'Physical + Simulated',
@@ -48,6 +49,7 @@ MANUAL = ('gui', 'keyboard', 'gamepad')
 DEFAULT_ORDER = {
     'leader_follower': ('leader', 'follower', 'follower'),
     'leader_only': ('leader', 'sim', 'sim'),
+    'leader_sim': ('leader', 'sim', 'sim'),
     'follower_only': ('hand_guided', 'follower', 'follower'),
     'simulation': ('gui', 'sim', 'sim'),
 }
@@ -67,9 +69,12 @@ def options(mode, arms, caps, sim, selection=None, cameras=None, extra=None):
     used = MODES.get(mode, MODES['leader_follower'])['arms']
     L, F = arms.get('leader') or {}, arms.get('follower') or {}
     lr = L.get('state') == 'connected' and L.get('source') == 'ros'
+    # the leader read by RawBot Studio's own serial session drives the simulated robot too
+    ls = L.get('state') == 'connected' and L.get('source') == 'serial' and 'leader' in used
     fr = F.get('state') == 'connected' and F.get('source') == 'ros'
     sim_on = bool(sim.get('running'))
-    config = 'simulation' if mode == 'simulation' else ('physical_sim' if sim_on else mode)
+    config = mode if mode in ('simulation', 'leader_sim') else (
+        'physical_sim' if sim_on else mode)
 
     def arm_reason(role, what):
         card = L if role == 'leader' else F
@@ -88,7 +93,7 @@ def options(mode, arms, caps, sim, selection=None, cameras=None, extra=None):
         if target == 'sim':
             if not sim_on:
                 return sim_reason
-            if action == 'leader' and not lr:
+            if action == 'leader' and not (lr or ls):
                 return arm_reason('leader', 'The leader arm')
             if action == 'hand_guided':
                 return ('Hand guiding moves the physical follower.', 'physical only')
@@ -98,6 +103,9 @@ def options(mode, arms, caps, sim, selection=None, cameras=None, extra=None):
             return ('Scripts and replays drive the simulated robot only (a physical arm moves '
                     'only under supervised control).', 'simulation only')
         if 'follower' not in used:
+            if mode == 'leader_sim':
+                return ('This configuration has no physical follower: the leader drives the '
+                        'simulated follower.', 'simulated follower')
             return arm_reason('follower', 'The physical follower')
         if action == 'leader':
             c = caps.get('teleoperation') or {}
@@ -122,7 +130,7 @@ def options(mode, arms, caps, sim, selection=None, cameras=None, extra=None):
             actions.append(_opt(key, label))
         else:
             first = next((r for r in reasons if r and r[0]), ('Not available.', ''))
-            if key == 'leader' and not lr:
+            if key == 'leader' and not lr and not ls:
                 first = arm_reason('leader', 'The leader arm')
             actions.append(_opt(key, label, *first))
     by_id = {a['id']: a for a in actions}
@@ -186,9 +194,19 @@ def options(mode, arms, caps, sim, selection=None, cameras=None, extra=None):
                   'configuration.' % (missing[0]['name'], missing[0]['topic']))
     action_param = 'follower' if (a == 'hand_guided' or (tg == 'sim' and a != 'leader')) \
         else 'leader'
+    if a == 'leader' and tg == 'sim' and not lr and ls:
+        # RawBot Studio publishes the leader joints itself (simbot.LEADER_STATE_TOPIC)
+        action_param = 'leader_state'
+        li = sim.get('leader_in') or {}
+        if not reason and sim_on and li and li.get('stale'):
+            reason = 'No fresh joint readings from the leader arm (serial session).'
+        if not reason and extra.get('leader_state_supported') is False:
+            reason = ('The robot runtime cannot record the leader read by RawBot Studio yet. '
+                      'Rebuild it: ./docker/physios-docker.sh build robot')
     streams = [
         {'id': 'state', 'label': 'Joint positions (state)', 'from': ob},
-        {'id': 'action', 'label': 'Joint actions', 'from': a if action_param == 'leader'
+        {'id': 'action', 'label': 'Joint actions (leader arm joint positions)'
+         if a == 'leader' else 'Joint actions', 'from': a if action_param != 'follower'
          else ob},
         {'id': 'gripper', 'label': 'Gripper (state and action)', 'from': ob},
         {'id': 'cameras', 'label': '%d camera%s' % (len(cameras or []),
@@ -206,7 +224,9 @@ def options(mode, arms, caps, sim, selection=None, cameras=None, extra=None):
         {'id': 'follower', 'kind': 'physical', 'label': 'Follower arm',
          'used': 'follower' in used, 'state': F.get('state'), 'source': F.get('source'),
          'joints': _joints(F)},
-        {'id': 'sim', 'kind': 'simulated', 'label': 'Simulated robot', 'used': sim_on,
+        {'id': 'sim', 'kind': 'simulated', 'label': 'Simulated follower'
+         if (mode == 'leader_sim' or sim.get('state_topic')) else 'Simulated robot',
+         'used': sim_on,
          'state': 'running' if sim_on else 'off', 'source': 'sim',
          'joints': list(sim.get('names') or []) if sim_on else []},
     ]

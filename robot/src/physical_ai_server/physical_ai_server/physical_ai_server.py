@@ -62,6 +62,7 @@ from physical_ai_server.utils.parameter_utils import (
 
 import rclpy
 from rclpy.node import Node
+from sensor_msgs.msg import JointState
 
 
 class PhysicalAIServer(Node):
@@ -101,6 +102,15 @@ class PhysicalAIServer(Node):
         # Read when a recording starts; set by the RawBot Studio interface.
         self.declare_parameter('action_source', 'leader')
         self.action_source = 'leader'
+        # 'leader_state' (Physical Leader + Simulated Follower): RawBot Studio reads the leader
+        # arm itself and publishes its joints as a JointState on this topic; it is recorded
+        # as the action while the simulated follower publishes the follower state topic.
+        # Declaring it also tells RawBot Studio that this runtime supports 'leader_state'.
+        self.declare_parameter('leader_state_topic', '/rawbot/leader/joint_states')
+        self._leader_state = None   # (JointState, perf_counter time)
+        self.create_subscription(
+            JointState, str(self.get_parameter('leader_state_topic').value),
+            self._leader_state_callback, 10)
 
         self._init_core_components()
 
@@ -277,10 +287,16 @@ class PhysicalAIServer(Node):
         )
         self.communicator.clear_latest_data()
         source = str(self.get_parameter('action_source').value or 'leader')
-        self.action_source = source if source in ('leader', 'follower') else 'leader'
+        self.action_source = source if source in ('leader', 'follower', 'leader_state') \
+            else 'leader'
         if self.action_source == 'follower':
             self.get_logger().info(
                 'Hand-guided recording: the follower joint states are the action.')
+        elif self.action_source == 'leader_state':
+            self._leader_state = None
+            self.get_logger().info(
+                'Leader read by RawBot Studio: %s is the action.'
+                % self.get_parameter('leader_state_topic').value)
 
         self.timer_manager = TimerManager(node=self)
         self.timer_manager.set_timer(
@@ -465,7 +481,15 @@ class PhysicalAIServer(Node):
                 self.get_logger().info('Waiting for follower data...')
                 return
 
-        elif leader_msgs is None and self.action_source != 'follower':
+        elif self.action_source == 'leader_state' and not self._leader_state_fresh():
+            if time.perf_counter() - self.start_recording_time > self.DEFAULT_TOPIC_TIMEOUT:
+                error_msg = 'Leader joint states (RawBot Studio) not received within timeout period'
+                self.get_logger().error(error_msg)
+            else:
+                self.get_logger().info('Waiting for leader joint states...')
+                return
+
+        elif leader_msgs is None and self.action_source == 'leader':
             if time.perf_counter() - self.start_recording_time > self.DEFAULT_TOPIC_TIMEOUT:
                 error_msg = 'Leader data not received within timeout period'
                 self.get_logger().error(error_msg)
@@ -478,10 +502,13 @@ class PhysicalAIServer(Node):
                 camera_msgs,
                 follower_msgs,
                 self.total_joint_order,
-                leader_msgs if self.action_source != 'follower' else None,
+                leader_msgs if self.action_source == 'leader' else None,
                 self.joint_order)
             if self.action_source == 'follower':
                 leader_data = self._follower_as_action(follower_msgs)
+            elif self.action_source == 'leader_state':
+                leader_data = self._joint_state_as_action(
+                    self._leader_state[0], 'leader joint states')
 
         except Exception as e:
             error_msg = f'Failed to convert messages: {str(e)}, please check the robot type again!'
@@ -534,6 +561,24 @@ class PhysicalAIServer(Node):
             self.on_recording = False
             self.timer_manager.stop(timer_name=self.operation_mode)
             return
+
+    def _leader_state_callback(self, msg):
+        self._leader_state = (msg, time.perf_counter())
+
+    def _leader_state_fresh(self, max_age=0.5):
+        return (self._leader_state is not None and
+                time.perf_counter() - self._leader_state[1] <= max_age)
+
+    def _joint_state_as_action(self, msg, what):
+        """A JointState as the action, in the order of the action (leader) joints."""
+        action = []
+        for key, names in self.joint_order.items():
+            values = self.data_manager.joint_msgs2tensor_array(msg, names)
+            if len(values) != len(names):
+                missing = [n for n in names if n not in list(msg.name)]
+                raise RuntimeError('the %s do not contain %s' % (what, ', '.join(missing)))
+            action.extend(values)
+        return action
 
     def _follower_as_action(self, follower_msgs):
         """Hand-guided recording: the action is the follower's measured joints, in the order

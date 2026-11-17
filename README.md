@@ -57,7 +57,7 @@ way.
 | Feature | What it does |
 |---|---|
 | **🤖 Robot selection** | Pick a built-in arm (SO-101, OpenMANIPULATOR-X/Y) or a custom robot, with live server link, robot heartbeat and an animated 3D arm. |
-| **🔌 Flexible hardware setup** | Work with Leader + Follower, Leader Only, Follower Only or no robot at all. Detect arms by their USB identity, connect and calibrate each one on its own, and see what the connected hardware allows; features turn on and off as arms are plugged in or lost. |
+| **🔌 Flexible hardware setup** | Work with Leader + Follower, Leader Only, Follower Only, a physical leader driving a simulated follower, or no robot at all. Detect arms by their USB identity, connect and calibrate each one on its own, and see what the connected hardware allows; features turn on and off as arms are plugged in or lost. |
 | **🎮 Hardware-aware Planning** | Planning shows only what your setup can do: pick the action source (leader, hand guiding, GUI, keyboard, gamepad, script, replay), the target (real follower or simulated robot) and what is recorded. A built-in simulated robot lets Leader Only and Simulation Only record demonstrations too. |
 | **🗺️ Collection planning** | Define the task, choose a planning type (static, semi-dynamic, dynamic, randomized, sequential, scenario-based), edit every episode on a workspace map, validate and approve a frozen plan. |
 | **🎥 Recording** | Plan mode records the approved plan episode by episode; free recording for ad-hoc demos. Original, processed, 3D simulation and multi-panel camera views, plus a camera check against the training data. |

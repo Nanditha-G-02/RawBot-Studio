@@ -122,11 +122,15 @@ export default function HardwareMonitor() {
             serviceType: 'rcl_interfaces/srv/SetParameters',
           });
           const t = setTimeout(() => resolve(null), 4000);
+          // 'leader_state' also sets leader_state_topic: an older robot runtime does not
+          // declare it, so its answer tells RawBot Studio to ask for a rebuild
+          const parameters = [{ name: 'action_source', value: { type: 4, string_value: want } }];
+          if (want === 'leader_state') parameters.push({ name: 'leader_state_topic', value: { type: 4, string_value: '/rawbot/leader/joint_states' } });
           srv.callService(
-            new ROSLIB.ServiceRequest({ parameters: [{ name: 'action_source', value: { type: 4, string_value: want } }] }),
+            new ROSLIB.ServiceRequest({ parameters }),
             (r) => {
               clearTimeout(t);
-              resolve(!!(r && r.results && r.results[0] && r.results[0].successful));
+              resolve(!!(r && r.results && r.results.length === parameters.length && r.results.every((x) => x.successful)));
             },
             () => {
               clearTimeout(t);
@@ -138,7 +142,7 @@ export default function HardwareMonitor() {
         ok = null;
       }
       if (ok === null) sourceSent.current = ''; // try again later
-      hwActionSource(robotType, ok).catch(() => {});
+      hwActionSource(robotType, ok, want).catch(() => {});
     })();
   }, [robotType, linked, mode, param, rosbridgeUrl]);
 

@@ -18,6 +18,7 @@ When is an arm "connected"
 
 from collections import deque
 import json
+import math
 import os
 from pathlib import Path
 import shutil
@@ -181,6 +182,7 @@ class Hardware:
         self.ever_connected = {}     # (robot_type, role) -> True once verified this session
         self.active_robot = None
         self.action_source_supported = {}
+        self._jog_lock = threading.Lock()
         # the simulated robot (simbot.py); publishes over its own rosbridge connection
         self.sim = SimRobot(self.ros.url, sampler=lambda t: self.ros.sample(t),
                             bridge_factory=_bridge if monitor else None, log=log,
@@ -346,9 +348,11 @@ class Hardware:
 
     # ---- setup ------------------------------------------------------------------------
     def setup(self, robot_type, mode=None, topics=None, env=None, source='operator',
-              cameras=None, joints=None, sim_twin=None, selection=None):
+              cameras=None, joints=None, sim_twin=None, selection=None, joint_map=None):
         cur = self.reg.setup(robot_type)
         kw = {}
+        if joint_map is not None:
+            kw['joint_map'] = clean_joint_map(joint_map)
         if cameras is not None:
             kw['cameras'] = {str(k)[:40]: t for k, t in (cameras or {}).items()
                              if isinstance(t, str) and t.startswith('/') and len(t) < 200}
@@ -398,8 +402,11 @@ class Hardware:
         self.active_robot = robot_type
         return self.status(robot_type)
 
-    def report_action_source(self, robot_type, supported):
-        self.action_source_supported[robot_type] = None if supported is None else bool(supported)
+    def report_action_source(self, robot_type, supported, source=None):
+        v = None if supported is None else bool(supported)
+        self.action_source_supported[robot_type] = v
+        if source:
+            self.action_source_supported[(robot_type, source)] = v
         return {'ok': True}
 
     # ---- discovery ------------------------------------------------------------------
@@ -565,7 +572,7 @@ class Hardware:
         d.mkdir(parents=True)
         cfg = {'port': port['device'], 'motors': motor_spec(robot_type),
                'status_file': str(d / 'status.json'), 'control_file': str(d / 'control.json'),
-               'rate_hz': 20}
+               'rate_hz': 30}
         atomic_write_json(d / 'config.json', cfg)
         atomic_write_json(d / 'control.json', {'command': 'run'})
         log = open(d / 'worker.log', 'ab', buffering=0)
@@ -665,6 +672,11 @@ class Hardware:
                      setup['topics'].get('leader')) if setup['topics'].get('leader') else None}
         caps = capmod.compute(setup['mode'], arms, extra)
         plan = self._planning(robot_type, setup, arms, caps, extra)
+        if setup['mode'] == 'leader_sim':
+            # demonstrations are recorded through the simulated follower (Planning decides)
+            for k in ('record', 'collect'):
+                caps[k] = dict(caps[k], available=plan['record']['available'],
+                               reason=plan['record']['reason'])
         return {
             'robot_type': robot_type, 'mode': setup['mode'], 'mode_label': MODES[
                 setup['mode']]['label'], 'mode_source': setup.get('mode_source'),
@@ -687,7 +699,7 @@ class Hardware:
     def _planning(self, robot_type, setup, arms, caps, extra):
         mode = setup['mode']
         ft = setup['topics'].get('follower')
-        run = mode == 'simulation' or bool(setup.get('sim_twin'))
+        run = mode in ('simulation', 'leader_sim') or bool(setup.get('sim_twin'))
         own_reason = ''
         if not ft:
             own_reason = 'The follower state topic of the robot configuration is not known yet.'
@@ -708,11 +720,17 @@ class Hardware:
                     if n:
                         names = n
                         break
+        # the leader read by RawBot Studio itself (serial session): converted to radians and
+        # published for the recorder; with bridge.py the leader topic is used as before
+        L = arms['leader']
+        serial_leader = L.get('state') == 'connected' and L.get('source') == 'serial'
+        sampler = self._leader_sampler(robot_type, setup) if serial_leader else None
         self.sim.ensure(robot_type, run, setup['topics'], names=names,
-                        state_topic=ft if (run and not own_reason) else None)
+                        state_topic=ft if (run and not own_reason) else None,
+                        leader_sampler=sampler, leader_pub=serial_leader)
         sim = self.sim.view()
         sim.update(can_own_state=not own_reason, own_reason=own_reason, twin=bool(
-            setup.get('sim_twin')))
+            setup.get('sim_twin')), joint_map=setup.get('joint_map') or {})
         compare = None
         if sim['running'] and ft and not self.sim.owns(ft) and \
                 arms['follower'].get('state') == 'connected':
@@ -722,7 +740,9 @@ class Hardware:
                 for k, t in sorted((setup.get('cameras') or {}).items())]
         out = planmod.options(mode, arms, caps, sim, setup.get('selection'), cams, {
             'jog_running': extra.get('jog_active'), 'compare': compare,
-            'calibration_active': extra.get('calibration_active')})
+            'calibration_active': extra.get('calibration_active'),
+            'leader_state_supported': self.action_source_supported.get(
+                (robot_type, 'leader_state'))})
         # what drives the simulated robot follows the selection: the leader arm, a mirror of
         # the physical follower (physical-to-simulation), or the operator (manual / script /
         # replay, started from the Planning page)
@@ -740,6 +760,25 @@ class Hardware:
                 sim = dict(sim, **self.sim.view())
         out['sim'] = sim
         return out
+
+    def _leader_sampler(self, robot_type, setup):
+        """Leader joints from RawBot Studio's read-only serial session, in radians: raw
+        Present_Position ticks of the calibrated motors (LeRobot half-turn homing puts the
+        middle of each range at 2048) -> (ticks - 2048) * 2*pi / 4096, then the joint map's
+        sign and offset."""
+        jm = setup.get('joint_map') or {}
+
+        def sample():
+            mon = self._monitor_status(robot_type, 'leader')
+            pos = mon.get('positions') or {}
+            if mon.get('phase') != 'running' or not pos:
+                return None, [], [], {}
+            names = list(pos)
+            vals = [ticks_to_rad(pos[n], jm.get(n)) for n in names]
+            return (time.time() - float(mon.get('t') or 0), names, vals,
+                    {'source': 'serial', 'ticks': [int(pos[n]) for n in names],
+                     'rate_hz': mon.get('rate_hz')})
+        return sample
 
     def sim_command(self, robot_type, body):
         if robot_type and robot_type != self.sim.robot_type:
@@ -1248,10 +1287,19 @@ class Hardware:
         return self._jog_view()
 
     def jog_command(self, jid, body):
+        # the page's 100 ms heartbeats and Stop arrive on parallel requests: one at a time, so
+        # a heartbeat can never write back over a Stop
+        with self._jog_lock:
+            return self._jog_command(jid, body)
+
+    def _jog_command(self, jid, body):
         j = self.jog
         if not j or j['id'] != jid:
             raise HardwareError('Jog session not found.', 404)
         ctl = read_json(j['dir'] / 'control.json') or {}
+        if ctl.get('command') in ('stop', 'estop') and body.get('command') not in (
+                'stop', 'estop'):
+            return self._jog_view()        # stopping: moves and heartbeats are ignored
         ctl['heartbeat'] = time.time()
         cmd = body.get('command')
         if cmd == 'move':
@@ -1347,6 +1395,31 @@ class Hardware:
         self.sim.stop()
         for k in list(self.monitors):
             self._stop_monitor(*k, wait=1.0)
+
+
+TICKS_PER_TURN = 4096
+TICKS_CENTER = 2048
+
+
+def ticks_to_rad(ticks, m=None):
+    m = m or {}
+    v = (float(ticks) - TICKS_CENTER) * 2 * math.pi / TICKS_PER_TURN
+    return v * (-1.0 if m.get('sign') == -1 else 1.0) + float(m.get('offset') or 0.0)
+
+
+def clean_joint_map(jm):
+    out = {}
+    for name, m in (jm or {}).items():
+        if not isinstance(m, dict):
+            continue
+        try:
+            off = float(m.get('offset') or 0.0)
+        except (TypeError, ValueError):
+            raise HardwareError('%s: the offset must be a number (radians).' % name)
+        if abs(off) > 2 * math.pi:
+            raise HardwareError('%s: the offset must be within one turn.' % name)
+        out[str(name)[:60]] = {'sign': -1 if m.get('sign') == -1 else 1, 'offset': off}
+    return out
 
 
 def _bridge(url):

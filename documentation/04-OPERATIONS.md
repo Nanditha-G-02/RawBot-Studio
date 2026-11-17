@@ -179,6 +179,7 @@ setup** row under the robot list sets what this robot has:
 |---|---|
 | **Leader + Follower** (default; existing projects keep it) | teleoperation, synchronized recording, demonstration collection (Plan → Record) |
 | **Leader Only** | leader calibration, leader joint monitoring, leader trajectory capture; with the simulated twin, recording (the leader drives the simulated robot) |
+| **Physical Leader + Simulated Follower** | one physical arm: the leader drives the simulated follower in real time; leader calibration and monitoring, task planning, demonstration recording (leader = action, simulated follower = state, cameras) |
 | **Follower Only** | follower calibration, joint monitoring, direct control (supervised jog), policy runs, hand-guided recording |
 | **Simulation Only** | planning, the 3D model and simulation view, training, the simulated robot (GUI / keyboard / gamepad / script / replay) and recording it; nothing uses an arm |
 
@@ -283,6 +284,34 @@ velocities are not a separate column (the dataset format stays the same); they f
 positions. Each plan take also stores how it was recorded (configuration, action source, target,
 observation, cameras); Data shows it as *Recorded with*.
 
+#### Physical Leader + Simulated Follower (one arm)
+
+1. Home or Robots → Hardware setup: choose **Physical Leader + Simulated Follower**. No follower
+   arm is needed or shown; the simulated follower starts by itself.
+2. Connect the leader: either RawBot Studio's read-only session (**Connect** on the leader card,
+   with `bridge.py` stopped; 30 readings/s), or `bridge.py` publishing the leader topic.
+3. Planning → Robot & control is set to *Leader arm → Simulated robot*, state from the simulated
+   follower. Move the leader: the table shows per joint the motor ticks (serial), the leader in
+   radians, the simulated follower's actual position and the difference.
+4. Record as usual (plan or free recording).
+
+How the joints map: by joint name (gripper included). Over serial, ticks are converted with
+`(ticks − 2048) × 2π / 4096` (LeRobot calibration centres each joint at 2048), then a per-joint
+sign and offset (*Joint mapping*, saved per robot). **Compare with a recorded dataset before you
+record**: if a joint moves the wrong way or is shifted against your earlier demonstrations, fix
+its sign / offset there. *Joint limits* can come from a dataset's joint envelope: the simulated
+follower stops at a limit and the table marks it. A leader that stops sending (unplugged,
+calibration, more than 0.5 s without a reading) leaves the simulated follower holding and blocks
+recording.
+
+What is recorded: the simulated follower's joints (`/joint_states`, published by RawBot Studio
+because no physical follower publishes it) as the state, the leader's joints as the action,
+cameras and timestamps, in the usual dataset format. With `bridge.py` the action comes from the
+leader topic as before. With RawBot Studio's serial session it publishes the leader on
+`/rawbot/leader/joint_states` and physical_ai_server records that (`action_source = leader_state`):
+this needs the rebuilt robot image (`./docker/physios-docker.sh build robot`); an older image is
+detected and the panel says so. Nothing is ever published on the follower command topic.
+
 **Not ready to record?** The panel says why, e.g. a camera that is not publishing (recording needs
 every camera of the robot configuration, also in Simulation Only), *bridge.py already publishes
 /joint_states* (stop it to record the simulated robot), or *start direct control first*.
@@ -385,7 +414,7 @@ Everything runs from the repository itself, without ROS, a GPU or a robot:
 ```bash
 cd backend
 python3 -m pytest -q tests            # gateway: 22
-python3 -m pytest -q trainer_tests    # training service, hardware, planning setup, standalone layout: 139 (1 skipped)
+python3 -m pytest -q trainer_tests    # training service, hardware, planning setup, standalone layout: 145 (1 skipped)
 cd ../robot/src/physical_ai_server
 python3 -m pytest -q test/planning    # planning engine: 46
 cd ../../../frontend && CI=true npm run build   # production build, lint warnings fail it

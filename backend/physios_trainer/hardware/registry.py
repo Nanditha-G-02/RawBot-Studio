@@ -28,6 +28,8 @@ ROLES = ('leader', 'follower')
 MODES = {
     'leader_follower': {'label': 'Leader + Follower', 'arms': ('leader', 'follower')},
     'leader_only': {'label': 'Leader Only', 'arms': ('leader',)},
+    # one physical arm (the leader) drives the simulated follower (hardware/simbot.py)
+    'leader_sim': {'label': 'Physical Leader + Simulated Follower', 'arms': ('leader',)},
     'follower_only': {'label': 'Follower Only', 'arms': ('follower',)},
     'simulation': {'label': 'Simulation Only', 'arms': ()},
 }

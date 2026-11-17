@@ -29,7 +29,7 @@ export const hwConfigure = (rt, role, body) => post('configure', rt, { role, ...
 export const hwConnect = (rt, role) => post('connect', rt, { role }, 60000);
 export const hwDisconnect = (rt, role) => post('disconnect', rt, { role });
 export const hwEstop = (source = 'page') => post('estop', '', { source });
-export const hwActionSource = (rt, supported) => post('action-source', rt, { supported });
+export const hwActionSource = (rt, supported, source) => post('action-source', rt, { supported, source });
 // the simulated robot (hardware/simbot.py) and the Planning choices (hardware/planning.py)
 export const hwSim = (rt, body) => post('sim', rt, body, 6000);
 export const hwPlanning = (rt, body) => post('setup', rt, body);
@@ -87,6 +87,7 @@ export function jointsFromParams(params) {
 export const MODE_OPTIONS = [
   { value: 'leader_follower', label: 'Leader + Follower', short: 'L + F' },
   { value: 'leader_only', label: 'Leader Only', short: 'Leader' },
+  { value: 'leader_sim', label: 'Physical Leader + Simulated Follower', short: 'L + Sim' },
   { value: 'follower_only', label: 'Follower Only', short: 'Follower' },
   { value: 'simulation', label: 'Simulation Only', short: 'Sim' },
 ];

@@ -222,6 +222,9 @@ class Robot:
                 if prm.get('name') == 'action_source':
                     self.action_source = (prm.get('value') or {}).get('string_value') or 'leader'
                     res.append({'successful': True, 'reason': ''})
+                elif prm.get('name') == 'leader_state_topic' and not os.environ.get(
+                        'STANDIN_OLD_RUNTIME'):
+                    res.append({'successful': True, 'reason': ''})
                 else:
                     res.append({'successful': False, 'reason': 'parameter not declared'})
             return {'results': res}
@@ -285,7 +288,8 @@ class Robot:
                     self.subs[ws].add(m['topic'])
                 elif op == 'advertise':
                     pass
-                elif op == 'publish' and 'leader' in m.get('topic', ''):
+                elif op == 'publish' and m.get('topic') == '/leader/joint_trajectory':
+                    # like bridge.py: only its command topic moves the follower
                     pts = (m.get('msg') or {}).get('points') or [{}]
                     self.command = list(pts[0].get('positions') or [])
                     self.command_t = time.time()

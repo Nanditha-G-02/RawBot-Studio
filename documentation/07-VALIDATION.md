@@ -91,7 +91,7 @@ the simulated robot's joint speed, dead-man, scripts, replays, captures, and tha
 follower topic to a real publisher. `test/planning` **46 passed** (a take keeps how it was
 recorded).
 
-`tests/e2e/plan_hw_check.py` **6/6** in the browser: the five configurations above with their
+`tests/e2e/plan_hw_check.py` **6/6** (then) in the browser: the five configurations above with their
 controls (sliders, held keyboard keys, waypoint script, dataset and capture replay, trajectory
 capture, keyboard direct control of the follower), the Record page control, a plan episode
 recorded with the simulated robot keeping its setup, both themes. `hw_ui_check.py` 9/9 (two
@@ -102,6 +102,22 @@ with `--hardware none`.
 **Not validated:** recording the simulated robot through the real physical_ai_server (the
 stand-in recorder writes synthetic joint data), a real gamepad, the real `bridge.py` together
 with the simulated robot on one ROS graph.
+
+### Physical Leader + Simulated Follower (17 Nov 2026)
+
+`test_planning_setup.py` (now 20): tick-to-radian conversion and joint map; a leader read over
+serial (simulated Feetech bus) drives the simulated follower including the gripper; the leader
+joints are published on `/rawbot/leader/joint_states` and never on the command topic; joint limits
+clamp and are reported; an older robot runtime, a stale or disconnected leader block recording;
+with bridge.py the leader topic is used; no automatic switch to Leader + Follower. Also: a jog
+Stop can no longer be overwritten by a concurrent heartbeat (found while testing).
+`plan_hw_check.py` **7/7** (new P6: Home → configuration, serial connect, the motor moved,
+simulated follower at +π/2 and the gripper following, Record, a plan take saved with
+`action_param leader_state`, dark mode). `hw_ui_check.py` 9/9, `setup_flow_check.py` 10/10,
+26-step walk-through, Optimize: pass. trainer_tests 145 (1 skipped), planning 46, gateway 22.
+
+**Not validated:** the new `leader_state` path in the real physical_ai_server (it cannot run in
+the sandbox; compiled only), your real leader arm's tick convention against your dataset.
 
 ## 3. Deployment validation
 

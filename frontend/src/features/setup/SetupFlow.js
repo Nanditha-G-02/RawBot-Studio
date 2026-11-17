@@ -731,6 +731,7 @@ function StepHardware({ view, setView }) {
 const REQUIRED = {
   leader_follower: { cap: 'teleoperation', text: 'Leader and follower both connected (teleoperation possible)' },
   leader_only: { cap: 'leader_monitor', text: 'Leader arm connected' },
+  leader_sim: { cap: 'leader_monitor', text: 'Leader arm connected (the follower is simulated)' },
   follower_only: { cap: 'follower_monitor', text: 'Follower arm connected' },
   simulation: { cap: 'simulation', text: 'Simulation Only: no arm is needed' },
 };

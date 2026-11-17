@@ -136,6 +136,7 @@ export default function PlanningSetup({ compact = false }) {
   const rec = p.record;
   const sim = status.sim || p.sim || {};
   const simMode = status.mode === 'simulation';
+  const leaderSim = status.mode === 'leader_sim';
 
   const summary = (
     <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 min-w-0">
@@ -143,7 +144,7 @@ export default function PlanningSetup({ compact = false }) {
         {p.config_label}
       </span>
       {p.robots
-        .filter((r) => r.used || r.kind === 'physical' || !simMode)
+        .filter((r) => !(leaderSim && r.id === 'follower') && (r.used || r.kind === 'physical' || !simMode))
         .map((r) => (
           <span key={r.id} data-plan-robot={r.id} data-robot-state={r.state || 'unknown'} title={r.joints.length ? `${r.joints.length} joints: ${r.joints.join(', ')}` : undefined}>
             <StatusDot
@@ -201,7 +202,7 @@ export default function PlanningSetup({ compact = false }) {
             <Choice label="Target robot" kind="target" options={p.targets} value={sel.target} onPick={pick('target')} busy={busy} />
             <Choice label="Observation" kind="observation" options={p.observations} value={sel.observation} onPick={pick('observation')} busy={busy} />
             <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 pt-1">
-              {!simMode && (
+              {!simMode && !leaderSim && (
                 <span data-plan-sim-twin={sim.twin ? 'on' : 'off'}>
                   <Toggle checked={!!sim.twin} disabled={busy} onChange={(v) => save({ sim_twin: v })} label={<span className="text-[12px]">Simulated twin</span>} />
                 </span>

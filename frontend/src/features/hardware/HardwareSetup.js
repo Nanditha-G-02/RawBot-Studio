@@ -967,6 +967,8 @@ export default function HardwareSetup() {
           <div className="text-[12.5px] text-ink-3 lg:pl-4">
             {status.mode === 'simulation'
               ? 'No physical robot: planning, the 3D model, the simulation view and training work; recording and anything that moves an arm are off.'
+              : status.mode === 'leader_sim'
+              ? 'One physical arm: the leader drives the simulated follower in real time. Connect the leader here (read-only session, no bridge.py needed) or through bridge.py; record demonstrations from Planning → Robot & control.'
               : status.mode === 'leader_only'
               ? 'Only the leader arm: calibrate it, monitor its joints and capture its trajectories. Connecting a follower later enables Leader + Follower.'
               : status.mode === 'follower_only'
@@ -1009,7 +1011,7 @@ export default function HardwareSetup() {
 
       {status.mode !== 'simulation' && <Unassigned robotType={robotType} status={status} busy={busy} run={run} />}
       <Capabilities status={status} />
-      {['leader_only', 'leader_follower'].includes(status.mode) && status.arms.leader.state !== 'unused' && (
+      {['leader_only', 'leader_sim', 'leader_follower'].includes(status.mode) && status.arms.leader.state !== 'unused' && (
         <LeaderCapture robotType={robotType} status={status} cap={status.capabilities.leader_capture} rosbridgeUrl={rosbridgeUrl} />
       )}
       {['follower_only', 'leader_follower'].includes(status.mode) && (

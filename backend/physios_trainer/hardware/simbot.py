@@ -26,6 +26,11 @@ import threading
 import time
 
 SIM_TOPIC = '/rawbot/sim/joint_states'
+# the leader arm's joints when RawBot Studio reads the leader itself (serial session, no
+# bridge.py): a JointState that physical_ai_server records as the action
+# (action_source 'leader_state'). Not a command topic: nothing moves an arm from it.
+LEADER_STATE_TOPIC = '/rawbot/leader/joint_states'
+LEADER_STALE_S = 0.5    # older leader readings: the simulated follower holds
 RATE_HZ = 30.0
 HOLD_S = 0.3            # a keyboard / gamepad velocity expires after this
 DEFAULT_SPEED = 1.5     # joint units per second (rad/s for the SO-101 bridge)
@@ -76,15 +81,23 @@ class SimRobot:
         self.published = 0
         self.started_at = None
         self.rec = None           # trajectory capture: {'t0': float, 'samples': [[t, ...]]}
+        # leader input: () -> (age, names, values, extra) when RawBot Studio reads the leader
+        # over serial; otherwise the leader ROS topic is sampled
+        self.leader_sampler = None
+        self.leader_pub = False   # publish the leader joints on LEADER_STATE_TOPIC
+        self.leader_in = None     # last leader reading as used: names, values, age, ...
         self._last = None
         self._stop = False
         if thread:
             threading.Thread(target=self._loop, daemon=True).start()
 
     # ---- configuration ----------------------------------------------------------------
-    def ensure(self, robot_type, run, topics, names=None, state_topic=None):
+    def ensure(self, robot_type, run, topics, names=None, state_topic=None,
+               leader_sampler=None, leader_pub=False):
         """Called by the manager on every status: start / stop, joints, allowed topics."""
         with self.lock:
+            self.leader_sampler = leader_sampler if run else None
+            self.leader_pub = bool(run and leader_pub and leader_sampler)
             if robot_type != self.robot_type:
                 self.robot_type = robot_type
                 self._reset(names or SO101_JOINTS)
@@ -210,6 +223,38 @@ class SimRobot:
                 raise ValueError('Unknown simulated-robot command "%s".' % cmd)
             return self.view()
 
+    def read_leader(self):
+        """(age, names, values, extra) of the leader arm, from RawBot Studio's serial session
+        or the leader ROS topic (bridge.py)."""
+        if self.leader_sampler is not None:
+            got = self.leader_sampler()
+            if got and got[0] is not None:
+                return got
+        topic = self.topics.get('leader')
+        if not topic:
+            return None, [], [], {}
+        age, names, vals = self.sampler(topic)
+        return age, names, vals, {'source': 'ros', 'topic': topic}
+
+    def _follow_leader(self):
+        """Joint mapping by name, joint-limit check, then the target. Stale input holds."""
+        age, names, vals, extra = self.read_leader()
+        info = {'age_s': None if age is None else round(age, 3), 'names': list(names),
+                'values': [float(v) for v in vals], 'at_limit': [],
+                'missing': [n for n in self.names if n not in names],
+                'source': extra.get('source'), 'topic': extra.get('topic'),
+                'ticks': extra.get('ticks'), 'rate_hz': extra.get('rate_hz'),
+                'stale': age is None or age > LEADER_STALE_S}
+        if not info['stale']:
+            for i, nme in enumerate(self.names):
+                if nme in names:
+                    v = float(vals[names.index(nme)])
+                    c = self._clamp(i, v)
+                    if abs(c - v) > 1e-9:
+                        info['at_limit'].append(nme)
+                    self.target[i] = c
+        self.leader_in = info
+
     def take_capture(self):
         """End the trajectory capture: (names, [[t, values...]]) or None."""
         with self.lock:
@@ -248,7 +293,9 @@ class SimRobot:
                         self.hold.pop(i, None)
                         continue
                     self.target[i] = self._clamp(i, self.target[i] + v * self.speed * dt)
-            elif self.drive in ('leader', 'follower'):
+            elif self.drive == 'leader':
+                self._follow_leader()
+            elif self.drive == 'follower':
                 topic = self.topics.get(self.drive)
                 age, names, vals = self.sampler(topic) if topic else (None, [], [])
                 if age is not None and age < 1.0:
@@ -286,8 +333,9 @@ class SimRobot:
                     lo, hi = r['rows'][k], r['rows'][min(k + 1, len(ts) - 1)]
                     self.target = [self._clamp(i, lo[i] + a * (hi[i] - lo[i]))
                                    for i in range(n)]
-            # mirror and replay follow closely; everything else at the joint speed
-            fast = self.drive in ('follower', 'replay')
+            # the leader, the mirror and replays follow closely; everything else at the
+            # joint speed
+            fast = self.drive in ('leader', 'follower', 'replay')
             lim = (self.speed * (4.0 if fast else 1.0)) * dt
             for i in range(n):
                 d = self.target[i] - self.pos[i]
@@ -305,6 +353,10 @@ class SimRobot:
                 return
             msg = joint_state(self.names, self.pos, self.vel)
             topics = [SIM_TOPIC] + ([self.state_topic] if self.state_topic else [])
+            li = self.leader_in
+            lead = None
+            if self.leader_pub and self.drive == 'leader' and li and not li['stale']:
+                lead = joint_state(li['names'], li['values'], [])
         if self.bridge_factory is None:
             return
         try:
@@ -316,6 +368,11 @@ class SimRobot:
                     self.br.advertise(t, 'sensor_msgs/msg/JointState')
                     self._advertised.add(t)
                 self.br.publish(t, msg)
+            if lead is not None:
+                if LEADER_STATE_TOPIC not in self._advertised:
+                    self.br.advertise(LEADER_STATE_TOPIC, 'sensor_msgs/msg/JointState')
+                    self._advertised.add(LEADER_STATE_TOPIC)
+                self.br.publish(LEADER_STATE_TOPIC, lead)
             self.published += 1
             self.error = None
         except Exception as e:  # noqa: BLE001
@@ -359,6 +416,10 @@ class SimRobot:
                 out['script'] = {'index': self.script['i'], 'count': len(
                     self.script['points']), 'loop': self.script['loop'],
                     'done': self.script['done']}
+            if self.drive == 'leader' and self.leader_in:
+                out['leader_in'] = dict(self.leader_in, published=self.leader_pub and
+                                        LEADER_STATE_TOPIC, values=[
+                                            round(v, 5) for v in self.leader_in['values']])
             if self.rec is not None:
                 n = len(self.rec['samples'])
                 out['capture'] = {'samples': n, 'duration_s': round(

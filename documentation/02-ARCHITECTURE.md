@@ -240,6 +240,11 @@ The training service keeps a small hardware manager (`backend/physios_trainer/ha
   `/rawbot/sim/joint_states` and, only when no physical follower or other node owns it, the
   follower state topic, so the recorder and the dataset format are unchanged. It never
   publishes on the command topic.
+* Physical Leader + Simulated Follower (`leader_sim`): the leader comes from bridge.py's topic or
+  from RawBot Studio's read-only serial session (30 Hz, ticks → radians, per-joint sign/offset,
+  joint limits). In the serial case the simulated robot also publishes the leader joints on
+  `/rawbot/leader/joint_states`; physical_ai_server's `action_source = leader_state` records that
+  topic as the action (its `leader_state_topic` parameter doubles as the feature check).
 
 `bridge.py` keeps ownership of the serial ports. Everything that moves an arm goes through it
 over ROS, as before.

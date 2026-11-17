@@ -332,3 +332,138 @@ def test_simulated_trajectory_capture_saves_and_replays(world, hw):
     for _ in range(60):
         hw.sim.step(1 / 30)
     assert hw.sim.pos[0] == pytest.approx(0.5, abs=1e-3)
+
+
+# ------------------------------------------- Physical Leader + Simulated Follower ---
+def serial_leader(world, hw):
+    world.plug('ttyACM0', serial='LEAD-A')
+    st = hw.detect(RT)
+    hw.assign(RT, st['unassigned'][0]['key'], 'leader')
+    st = hw.setup(RT, mode='leader_sim')
+    st = hw.connect(RT, 'leader')
+    assert st['arms']['leader']['source'] == 'serial'
+    for _ in range(40):                      # first reading of the read-only session
+        if hw._monitor_status(RT, 'leader').get('phase') == 'running':
+            break
+        time.sleep(0.1)
+    return hw.status(RT)
+
+
+def test_ticks_to_radians_and_joint_map():
+    from physios_trainer.hardware.manager import clean_joint_map, ticks_to_rad
+    assert ticks_to_rad(2048) == 0.0
+    assert ticks_to_rad(3072) == pytest.approx(math.pi / 2)
+    assert ticks_to_rad(1024, {'sign': -1, 'offset': 0.1}) == pytest.approx(math.pi / 2 + 0.1)
+    assert clean_joint_map({'gripper': {'sign': -1, 'offset': '0.2'}, 'x': 3}) == {
+        'gripper': {'sign': -1, 'offset': 0.2}}
+    with pytest.raises(HardwareError):
+        clean_joint_map({'gripper': {'offset': 9}})
+
+
+def test_leader_sim_serial_leader_drives_the_simulated_follower(world, hw):
+    """One physical arm read over serial (no bridge.py): the simulated follower reproduces it,
+    its joints are the recorded state and the leader's are the recorded action."""
+    st = serial_leader(world, hw)
+    p = st['planning']
+    assert p['config'] == 'leader_sim' and st['sim']['running']
+    assert p['selection'] == {'action': 'leader', 'target': 'sim', 'observation': 'sim'}
+    assert {r['id']: r['label'] for r in p['robots']}['sim'] == 'Simulated follower'
+    t = opts(st, 'targets')
+    assert not t['follower']['available'] and t['follower']['short'] == 'simulated follower'
+    assert st['sim']['drive'] == 'leader' and st['sim']['state_topic'] == '/joint_states'
+    assert p['record']['action_param'] == 'leader_state'
+    # the leader moves: shoulder_pan (motor 1) to 3072 ticks = +pi/2
+    world.set('ttyACM0', actual={'1': 3072, '2': 2048, '3': 2048, '4': 2048, '5': 2048,
+                                 '6': 1024})
+    time.sleep(0.4)
+    for _ in range(40):
+        hw.sim.step(1 / 30)
+    li = hw.sim.view()['leader_in']
+    assert li['source'] == 'serial' and not li['stale'] and li['ticks'][0] == 3072
+    assert hw.sim.pos[0] == pytest.approx(math.pi / 2, abs=1e-3)
+    assert hw.sim.pos[5] == pytest.approx(-math.pi / 2, abs=1e-3)      # gripper follows too
+    st = hw.status(RT)
+    assert st['planning']['record']['available'], st['planning']['record']['reason']
+    assert st['capabilities']['record']['available']                    # the Hardware page agrees
+    # the leader joints are published for the recorder, never on the command topic
+    pub = Pub()
+    hw.sim.br, hw.sim._advertised = pub, set()
+    hw.sim.bridge_factory = lambda url: pub
+    hw.sim._publish()
+    topics = [t for t, _ in pub.sent]
+    assert '/rawbot/leader/joint_states' in topics and '/joint_states' in topics
+    assert '/leader/joint_trajectory' not in topics
+    lead = dict(pub.sent)['/rawbot/leader/joint_states']
+    assert lead['position'][0] == pytest.approx(math.pi / 2)
+    # joint limits: clamped and reported
+    hw.sim_command(RT, {'command': 'limits', 'limits': {'shoulder_pan': [-1.0, 1.0]}})
+    hw.sim.step(1 / 30)
+    assert hw.sim.target[0] == pytest.approx(1.0)
+    assert 'shoulder_pan' in hw.sim.view()['leader_in']['at_limit']
+    # joint map: direction flipped
+    hw.setup(RT, joint_map={'shoulder_pan': {'sign': -1}})
+    hw.sim_command(RT, {'command': 'limits', 'limits': {'shoulder_pan': [-3.0, 3.0]}})
+    for _ in range(40):
+        hw.sim.step(1 / 30)
+    assert hw.sim.pos[0] == pytest.approx(-math.pi / 2, abs=1e-3)
+
+
+def test_leader_sim_needs_a_robot_runtime_that_records_the_leader_state(world, hw):
+    serial_leader(world, hw)
+    hw.report_action_source(RT, False, 'leader_state')
+    st = hw.status(RT)
+    assert not st['planning']['record']['available']
+    assert 'physios-docker.sh build robot' in st['planning']['record']['reason']
+    hw.report_action_source(RT, True, 'leader_state')
+    assert hw.status(RT)['planning']['record']['available']
+
+
+def test_leader_sim_stale_leader_holds_and_blocks_recording(world, hw):
+    serial_leader(world, hw)
+    hw.disconnect(RT, 'leader')
+    st = hw.status(RT)
+    assert not st['planning']['record']['available']
+    assert not opts(st, 'action_sources')['leader']['available']
+
+
+def test_leader_sim_with_bridge_uses_the_leader_topic(world, hw):
+    """With bridge.py publishing the leader, nothing changes in the recorder (action = the
+    leader topic), and a physical follower appearing does not switch the configuration."""
+    register(world, hw, ('leader',))
+    hw.setup(RT, mode='leader_sim')
+    live(hw, follower=False)
+    st = hw.status(RT)
+    assert st['planning']['record']['action_param'] == 'leader'
+    assert st['planning']['record']['available']
+    hw._auto_upgrade(RT, 'leader_sim', {'follower'})
+    assert hw.status(RT)['mode'] == 'leader_sim'
+
+
+def test_jog_stop_is_not_overwritten_by_a_heartbeat(tmp_path, hw):
+    """Heartbeats and Stop come on parallel requests; once Stop is written it stays."""
+    import json as _json
+    import threading as _th
+
+    class Proc:
+        def poll(self):
+            return None
+    d = tmp_path / 'jog'
+    d.mkdir()
+    (d / 'control.json').write_text(_json.dumps({'command': 'run', 'heartbeat': 0}))
+    hw.jog = {'id': 'jog-x', 'proc': Proc(), 'dir': d, 'robot_type': RT, 'started': 0}
+    stop = _th.Event()
+
+    def beat():
+        while not stop.is_set():
+            hw.jog_command('jog-x', {'command': 'heartbeat'})
+    ts = [_th.Thread(target=beat) for _ in range(4)]
+    for t in ts:
+        t.start()
+    time.sleep(0.05)
+    hw.jog_command('jog-x', {'command': 'stop'})
+    time.sleep(0.1)
+    stop.set()
+    for t in ts:
+        t.join()
+    assert _json.loads((d / 'control.json').read_text())['command'] == 'stop'
+    hw.jog = None

@@ -2,6 +2,16 @@
 
 ## 2.0.0, renamed (2026-11-13)
 
+* **Physical Leader + Simulated Follower:** a new configuration for one physical arm. The leader,
+  read by bridge.py or by RawBot Studio's own serial session (30 Hz), drives the simulated
+  follower in real time (joint mapping by name, ticks → radians with per-joint sign / offset,
+  joint limits from a dataset, gripper included). Planning is preset to *Leader arm → Simulated
+  robot*; a live table shows ticks, leader, simulated follower and the difference. Recording saves
+  the simulated follower as the state and the leader as the action in the usual format (serial
+  leader: new physical_ai_server `action_source = leader_state`, needs the robot image rebuild).
+  No physical follower is required or shown.
+* Fix: a direct-control Stop could be lost when a page heartbeat arrived at the same moment.
+
 * **Planning adapts to the hardware.** *Robot & control* at the top of Planning (and on Record)
   shows the configuration, the physical and simulated robots, cameras and whether recording is
   possible now, and offers only the compatible action sources (leader arm, hand guiding, GUI,

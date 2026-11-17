@@ -25,11 +25,11 @@ import { NumberInput, Select, Spinner, StatusDot, Toggle } from '../../component
 import rosConnectionManager from '../../utils/rosConnectionManager';
 import { usePlanningService } from '../../hooks/usePlanningService';
 import { trainerFetch } from '../../hooks/useTrainer';
-import { captures as listCaptures, hwSim } from '../hardware/hardwareApi';
+import { captures as listCaptures, hwPlanning, hwSim, jogLimits } from '../hardware/hardwareApi';
 import { setHardwareStatus } from '../hardware/hardwareSlice';
 import useHeldInput, { KEY_PAIRS, PAD_MAP } from './useHeldInput';
 
-const fmt = (v) => (typeof v === 'number' ? v.toFixed(3) : '—');
+const fmt = (v) => (typeof v === 'number' ? (Math.abs(v) < 0.0005 ? 0 : v).toFixed(3) : '—');
 
 // live joint states of the simulated robot (30 Hz over rosbridge); the 2 s hardware status
 // is the fallback when rosbridge does not deliver them
@@ -94,7 +94,7 @@ export default function SimControl({ robotType, sim, action, compact }) {
         <StatusDot
           tone={sim.error ? 'err' : sim.drive === 'manual' ? 'ok' : 'sky'}
           pulse={sim.drive !== 'manual'}
-          label={sim.error ? 'Not publishing' : `Simulated robot · ${DRIVE_LABEL[sim.drive] || sim.drive}`}
+          label={sim.error ? 'Not publishing' : `${sim.state_topic ? 'Simulated follower' : 'Simulated robot'} · ${DRIVE_LABEL[sim.drive] || sim.drive}`}
         />
         {sim.state_topic && <span className="chip num" title="physical_ai_server records this topic as the robot state">{sim.state_topic}</span>}
         <span className="flex-1" />
@@ -133,8 +133,8 @@ export default function SimControl({ robotType, sim, action, compact }) {
       )}
       {action === 'script' && <Script robotType={robotType} names={names} sim={sim} live={live} send={send} />}
       {action === 'replay' && <Replay robotType={robotType} sim={sim} send={send} />}
-      {action === 'leader' && <p className="text-[12px] text-ink-3">The leader arm drives the simulated robot.</p>}
-      {!compact && action !== 'gui' && <JointReadout names={names} pos={pos} />}
+      {action === 'leader' && <LeaderSync robotType={robotType} sim={sim} pos={pos} compact={compact} send={send} />}
+      {!compact && action !== 'gui' && action !== 'leader' && <JointReadout names={names} pos={pos} />}
     </div>
   );
 }
@@ -146,6 +146,175 @@ const DRIVE_LABEL = {
   script: 'running the script',
   replay: 'replaying a trajectory',
 };
+
+// live leader joints: RawBot Studio's own topic when it reads the leader over serial, else the
+// leader topic of bridge.py; the 2 s hardware status is the fallback
+function useLeaderJoints(li) {
+  const rosbridgeUrl = useSelector((s) => s.ros.rosbridgeUrl);
+  const [msg, setMsg] = useState(null);
+  const topic = li?.published || li?.topic;
+  const type = li?.published ? 'sensor_msgs/msg/JointState' : 'trajectory_msgs/msg/JointTrajectory';
+  useEffect(() => {
+    if (!topic) return undefined;
+    let sub = null;
+    let alive = true;
+    let lastT = 0;
+    rosConnectionManager
+      .getConnection(rosbridgeUrl)
+      .then((ros) => {
+        if (!alive) return;
+        sub = new ROSLIB.Topic({ ros, name: topic, messageType: type, throttle_rate: 66 });
+        sub.subscribe((m) => {
+          const t = Date.now();
+          if (t - lastT < 60) return;
+          lastT = t;
+          const names = m.name || m.joint_names || [];
+          const positions = m.position || (m.points && m.points[0] && m.points[0].positions) || [];
+          setMsg({ names, positions, t });
+        });
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+      if (sub) sub.unsubscribe();
+    };
+  }, [topic, type, rosbridgeUrl]);
+  const fresh = msg && Date.now() - msg.t < 1500;
+  return fresh ? msg : { names: li?.names || [], positions: li?.values || [] };
+}
+
+// Physical leader -> simulated follower: joint mapping by name, the conversion from motor
+// ticks (serial session), joint limits, and what the simulated follower actually does
+function LeaderSync({ robotType, sim, pos, compact, send }) {
+  const dispatch = useDispatch();
+  const li = sim.leader_in || {};
+  const lead = useLeaderJoints(li);
+  const names = sim.names || [];
+  const serial = li.source === 'serial';
+  const [ds, setDs] = useState('');
+  const [datasets, setDatasets] = useState([]);
+  const [map, setMap] = useState(null);
+  const jm = map || sim.joint_map || {};
+  useEffect(() => {
+    trainerFetch('/datasets')
+      .then((r) => setDatasets(r.datasets || []))
+      .catch(() => {});
+  }, []);
+  const lv = (n) => {
+    const i = lead.names.indexOf(n);
+    return i >= 0 ? Number(lead.positions[i]) : undefined;
+  };
+  const ticks = (n) => {
+    const i = (li.names || []).indexOf(n);
+    return i >= 0 && li.ticks ? li.ticks[i] : undefined;
+  };
+  const limitsFrom = async (id) => {
+    setDs(id);
+    try {
+      if (!id) {
+        await send({ command: 'limits', limits: Object.fromEntries(names.map((n) => [n, [-Math.PI, Math.PI]])) });
+        return;
+      }
+      const r = await jogLimits(id);
+      const lim = {};
+      r.joints.forEach((j) => {
+        if (names.includes(j.name) && j.min !== '' && j.max !== '' && Number(j.min) < Number(j.max)) lim[j.name] = [Number(j.min), Number(j.max)];
+      });
+      await send({ command: 'limits', limits: lim });
+      toast.success(`Joint limits from ${id}`);
+    } catch (e) {
+      toast.error(e.message);
+    }
+  };
+  const saveMap = async () => {
+    try {
+      dispatch(setHardwareStatus(await hwPlanning(robotType, { joint_map: jm })));
+      setMap(null);
+      toast.success('Joint mapping saved');
+    } catch (e) {
+      toast.error(e.message);
+    }
+  };
+  const setM = (n, k, v) => setMap({ ...jm, [n]: { sign: 1, offset: 0, ...(jm[n] || {}), [k]: v } });
+  return (
+    <div className="space-y-2" data-leader-sync={li.stale ? 'stale' : 'live'}>
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[12px]">
+        <StatusDot
+          tone={li.stale ? 'warn' : 'ok'}
+          pulse={!li.stale}
+          label={
+            li.stale
+              ? 'No fresh leader readings - the simulated follower holds'
+              : serial
+              ? `Leader · serial session${li.rate_hz ? ` ${li.rate_hz} Hz` : ''}`
+              : `Leader · bridge.py (${li.topic || 'leader topic'})`
+          }
+        />
+        {li.published && <span className="chip num" title="Recorded as the action (action_source leader_state)">{li.published}</span>}
+        {(li.at_limit || []).length > 0 && <span className="chip-warn">at limit: {li.at_limit.join(', ')}</span>}
+        {(li.missing || []).length > 0 && <span className="chip-warn">no leader joint: {li.missing.join(', ')}</span>}
+      </div>
+      <table className="w-full text-[11.5px] font-mono" data-leader-sync-table>
+        <thead>
+          <tr className="text-left text-ink-4">
+            <th className="font-normal">joint</th>
+            {serial && <th className="font-normal text-right">ticks</th>}
+            <th className="font-normal text-right">leader</th>
+            <th className="font-normal text-right">sim</th>
+            <th className="font-normal text-right">Δ</th>
+          </tr>
+        </thead>
+        <tbody>
+          {names.map((n, i) => {
+            const a = lv(n);
+            const b = pos(n);
+            const d = a !== undefined && b !== undefined ? b - a : undefined;
+            const lim = (li.at_limit || []).includes(n);
+            return (
+              <tr key={n} className="border-t border-rule" data-sync-joint={n}>
+                <td className="truncate max-w-[120px]">{n}</td>
+                {serial && <td className="text-right tabular-nums text-ink-3">{ticks(n) ?? '—'}</td>}
+                <td className="text-right tabular-nums">{fmt(a)}</td>
+                <td className={clsx('text-right tabular-nums', lim && 'text-signal-warn')}>{fmt(b)}</td>
+                <td className={clsx('text-right tabular-nums', d !== undefined && Math.abs(d) > 0.1 && 'text-signal-warn')}>{fmt(d)}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      {!compact && (
+        <div className="grid gap-2 sm:grid-cols-[auto_1fr] sm:items-center text-[12px]">
+          <span className="label">Joint limits</span>
+          <Select
+            value={ds}
+            onChange={limitsFrom}
+            options={[{ value: '', label: '±π (no dataset)' }, ...datasets.map((d) => ({ value: d.id, label: `From ${d.id}` }))]}
+          />
+        </div>
+      )}
+      {!compact && serial && (
+        <details className="text-[12px]" data-joint-map>
+          <summary className="cursor-pointer text-ink-3 hover:text-ink">Joint mapping (ticks → radians)</summary>
+          <p className="mt-1 text-[11.5px] text-ink-4">(ticks − 2048) × 2π / 4096, then sign and offset. Compare with a recorded dataset before recording.</p>
+          <div className="mt-1.5 grid gap-1">
+            {names.map((n) => (
+              <div key={n} className="grid grid-cols-[110px_60px_1fr] items-center gap-2" data-map-joint={n}>
+                <span className="font-mono truncate">{n}</span>
+                <button type="button" className="btn btn-sm justify-center" onClick={() => setM(n, 'sign', (jm[n]?.sign || 1) === 1 ? -1 : 1)} aria-label={`${n} direction`}>
+                  {(jm[n]?.sign || 1) === 1 ? '+1' : '−1'}
+                </button>
+                <NumberInput value={jm[n]?.offset || 0} step={0.01} onChange={(v) => setM(n, 'offset', Number(v) || 0)} suffix="rad" className="py-1" />
+              </div>
+            ))}
+          </div>
+          <button className="btn btn-sm mt-2" disabled={!map} onClick={saveMap} data-action="save-joint-map">
+            Save mapping
+          </button>
+        </details>
+      )}
+    </div>
+  );
+}
 
 function JointReadout({ names, pos }) {
   return (
