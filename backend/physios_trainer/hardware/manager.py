@@ -96,7 +96,7 @@ class RosWatch:
             self.frame_topics = {t for t in frames if t}
 
     def _loop(self):
-        from physios_trainer.rollout_worker import Bridge
+        from physios_trainer.rollout_worker import Bridge, drop
         last_pub = 0.0
         while not self._stop:
             with self.lock:
@@ -107,6 +107,7 @@ class RosWatch:
                 time.sleep(0.5)
                 continue
             if self.br is None or not self.br.alive:
+                self.br = drop(self.br)
                 try:
                     self.br = Bridge(self.url)
                     self._subscribed = set()
@@ -140,7 +141,7 @@ class RosWatch:
             except Exception as e:  # noqa: BLE001
                 self.error = str(e)[:200]
                 self.connected = False
-                self.br = None
+                self.br = drop(self.br)
             time.sleep(0.25)
 
     def sample(self, topic):
@@ -880,7 +881,14 @@ class Hardware:
                   not self.ros.foreign_publishers(ft))
         if on:
             self.relay.set(ft, self._arm_sampler(robot_type, setup, 'follower'))
-            F['publishes'] = ft
+            # only claim publishing once messages actually went out over rosbridge
+            v = self.relay.view() or {}
+            if v.get('error'):
+                F['publish_error'] = v['error']
+            elif v.get('published'):
+                F['publishes'] = ft
+            else:
+                F['publish_pending'] = ft
         elif self.relay.topic:
             self.relay.clear()
         return on

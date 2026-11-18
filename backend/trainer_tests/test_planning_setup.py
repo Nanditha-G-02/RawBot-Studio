@@ -601,9 +601,17 @@ def test_follower_read_over_serial_is_published_for_ros(world, hw):
     st = hw.status(RT)
     F = st['arms']['follower']
     assert F['state'] == 'connected' and F['source'] == 'serial'
-    assert F['publishes'] == '/joint_states' and hw.relay.owns('/joint_states')
+    # nothing has gone out yet: no claim that it publishes
+    assert 'publishes' not in F and F['publish_pending'] == '/joint_states'
+    assert hw.relay.owns('/joint_states')
     msg = hw.relay.tick()
     assert msg['name'][0] == 'shoulder_pan' and msg['position'][0] == pytest.approx(math.pi / 2)
+    assert hw.status(RT)['arms']['follower']['publishes'] == '/joint_states'
+    # rosbridge fails: the card says so instead of 'Publishing'
+    hw.relay.error = 'Cannot publish over rosbridge (ws://x): timed out'
+    F2 = hw.status(RT)['arms']['follower']
+    assert 'publishes' not in F2 and F2['publish_error'].startswith('Cannot publish')
+    hw.relay.error = None
     assert st['capabilities']['hand_guided_record']['available']
     assert not st['capabilities']['follower_control']['available']      # needs bridge.py
     p = st['planning']

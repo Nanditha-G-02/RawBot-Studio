@@ -53,6 +53,17 @@ def joint_state(names, pos, vel):
             'velocity': [float(v) for v in vel], 'effort': []}
 
 
+
+def _drop(br):
+    """Close a bridge being replaced: an unclosed one keeps its rosbridge connection."""
+    if br is not None:
+        try:
+            br.close()
+        except Exception:  # noqa: BLE001
+            pass
+    return None
+
+
 class SimRobot:
     """``bridge_factory(url)`` returns an object with advertise/publish/alive (rollout_worker
     Bridge); ``sampler(topic)`` returns (age, names, values) like RosWatch.sample."""
@@ -428,6 +439,7 @@ class SimRobot:
             return
         try:
             if self.br is None or not getattr(self.br, 'alive', True):
+                self.br = _drop(self.br)
                 self.br = self.bridge_factory(self.url)
                 self._advertised = set()
             for t in topics:
@@ -444,7 +456,7 @@ class SimRobot:
             self.error = None
         except Exception as e:  # noqa: BLE001
             self.error = 'Cannot publish over rosbridge (%s): %s' % (self.url, str(e)[:160])
-            self.br = None
+            self.br = _drop(self.br)
 
     def _loop(self):
         period = 1.0 / RATE_HZ

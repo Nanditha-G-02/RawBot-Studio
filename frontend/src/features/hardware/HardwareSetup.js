@@ -215,6 +215,8 @@ function ArmCard({ robotType, card, busy, run, onConfigure, onCalibrate, rosbrid
           rows={[
             ['Connection', card.state === 'connected' ? (card.source === 'ros' ? 'Verified · live ROS messages from bridge.py' : 'Verified · every motor answers (read-only)') : STATE_LABEL[card.state]],
             card.publishes && ['ROS', <span data-arm-publishes={card.publishes}>Publishing <span className="font-mono">{card.publishes}</span> from this session</span>],
+            card.publish_error && ['ROS', <span className="text-signal-err" data-arm-publish-error>Not publishing: ROS not reachable</span>],
+            card.publish_pending && ['ROS', <span className="text-ink-3" data-arm-publish-pending>Starting to publish <span className="font-mono">{card.publish_pending}</span>…</span>],
             [
               'Serial port',
               port ? (

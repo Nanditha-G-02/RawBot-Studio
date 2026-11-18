@@ -20,6 +20,17 @@ RATE_HZ = 30.0
 STALE_S = 0.5
 
 
+
+def _drop(br):
+    """Close a bridge being replaced: an unclosed one keeps its rosbridge connection."""
+    if br is not None:
+        try:
+            br.close()
+        except Exception:  # noqa: BLE001
+            pass
+    return None
+
+
 class StateRelay:
     def __init__(self, url, bridge_factory=None, log=print, thread=True):
         self.url = url
@@ -60,11 +71,13 @@ class StateRelay:
         if age is None or age > STALE_S or not names:
             return None
         msg = joint_state(names, vals, [])
-        if self.bridge_factory is None:
+        if self.bridge_factory is None:     # no ROS (tests): handed over locally
             self.last = msg
+            self.published += 1
             return msg
         try:
             if self.br is None or not getattr(self.br, 'alive', True):
+                self.br = _drop(self.br)
                 self.br = self.bridge_factory(self.url)
                 self.advertised = set()
             if topic not in self.advertised:
@@ -76,7 +89,7 @@ class StateRelay:
             self.last = msg
         except Exception as e:  # noqa: BLE001
             self.error = 'Cannot publish over rosbridge (%s): %s' % (self.url, str(e)[:160])
-            self.br = None
+            self.br = _drop(self.br)
         return msg
 
     def _loop(self):

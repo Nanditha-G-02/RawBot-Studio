@@ -53,6 +53,15 @@ class WS:
     def __init__(self, url, timeout=5.0):
         u = urlparse(url)
         self.sock = socket.create_connection((u.hostname, u.port or 80), timeout=timeout)
+        try:
+            self._handshake(u)
+        except BaseException:
+            self.sock.close()     # never leave a half-open connection on rosbridge
+            raise
+        self.sock.settimeout(None)
+        self.lock = threading.Lock()
+
+    def _handshake(self, u):
         key = base64.b64encode(os.urandom(16)).decode()
         req = ('GET %s HTTP/1.1\r\nHost: %s:%d\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n'
                'Sec-WebSocket-Key: %s\r\nSec-WebSocket-Version: 13\r\n\r\n' % (
@@ -67,8 +76,6 @@ class WS:
         head, self.buf = resp.split(b'\r\n\r\n', 1)
         if b' 101 ' not in head.split(b'\r\n')[0]:
             raise ConnectionError('rosbridge refused the websocket: %r' % head[:80])
-        self.sock.settimeout(None)
-        self.lock = threading.Lock()
 
     def send(self, obj):
         data = json.dumps(obj).encode()
@@ -161,7 +168,9 @@ class Bridge:
                         self.cv.notify_all()
         except Exception as e:  # noqa: BLE001
             self.error = str(e)
-            self.alive = False
+        # whatever ended the reader, the connection is finished: close it so rosbridge drops
+        # the client and its subscriptions (an unclosed one keeps them, and its file handle)
+        self.close()
 
     def subscribe(self, topic, typ, throttle_ms=0):
         self.ws.send({'op': 'subscribe', 'topic': topic, 'type': typ,
@@ -190,6 +199,16 @@ class Bridge:
     def close(self):
         self.alive = False
         self.ws.close()
+
+
+def drop(br):
+    """Close a bridge that is being replaced (None-safe, never raises)."""
+    if br is not None:
+        try:
+            br.close()
+        except Exception:  # noqa: BLE001
+            pass
+    return None
 
 
 # ------------------------------------------------------------------- limits --

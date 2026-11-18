@@ -2,6 +2,14 @@
 
 ## 2.0.0, renamed (2026-11-13)
 
+* **Fix: rosbridge ran out of file handles (`Errno 24 Too many open files`).** The training
+  service's ROS clients (status watch, follower relay, simulated robot) replaced a failed
+  rosbridge connection without closing it; each stale client kept its socket and subscriptions on
+  rosbridge. They now close it first, a client whose connection drops closes it, and a refused
+  handshake closes its socket.
+* **Fix: the follower card claimed "Publishing …" while ROS was unreachable.** It now says so only
+  after messages went out, otherwise "Not publishing: ROS not reachable" or "Starting to publish".
+
 * **Kinematics and workspace limits.** Forward / inverse kinematics from a custom robot's URDF
   (or the approximate SO-101 chain); a tool pad for the simulated robot; steps that would take the
   tool into the table, off the table area, near the base or into keep-outs are held in the
