@@ -7,6 +7,10 @@
   rosbridge connection without closing it; each stale client kept its socket and subscriptions on
   rosbridge. They now close it first, a client whose connection drops closes it, and a refused
   handshake closes its socket.
+* **Fix: "ROS not reachable: No module named 'numpy'".** The websocket client the training
+  service shares with the rollout worker masked frames with numpy, which the service's plain
+  Python does not have. Masking is standard library now; `devstack.py --service-python` runs the
+  service on a bare Python to keep it that way.
 * **Fix: the follower card claimed "Publishing …" while ROS was unreachable.** It now says so only
   after messages went out, otherwise "Not publishing: ROS not reachable" or "Starting to publish".
 

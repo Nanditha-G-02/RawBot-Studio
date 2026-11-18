@@ -139,6 +139,9 @@ def main():
     ap.add_argument('--seed', action='store_true')
     ap.add_argument('--keep', action='store_true', help='do not wipe the work dir')
     ap.add_argument('--hardware', choices=('bridge', 'free', 'none'), default='bridge')
+    ap.add_argument('--service-python', default=None,
+                    help='Python for the training service and gateway (default: this one); '
+                         'use a bare one to check they need nothing beyond the standard library')
     a = ap.parse_args()
     import fixtures as fx  # backend/trainer_tests
     work = Path(a.work).resolve()
@@ -170,11 +173,12 @@ def main():
 
     spawn([py, 'standin_server.py', '--data-root', str(work / 'plan'), '--dataset-root',
            str(work / 'ds')], HERE, 'standin.log')
-    spawn([py, '-m', 'physios_trainer', '--data-root', str(work / 'data'), '--data-dir',
+    spy = a.service_python or py
+    spawn([spy, '-m', 'physios_trainer', '--data-root', str(work / 'data'), '--data-dir',
            str(work / 'training'), '--dataset-root', str(work / 'ds'), '--env',
            'stub=%s' % env, '--env', 'realpy=%s' % (work / 'realpy')],
           ROOT / 'backend', 'trainer.log', world.env())
-    spawn([py, '-m', 'physios_gateway'], ROOT / 'backend', 'gateway.log',
+    spawn([spy, '-m', 'physios_gateway'], ROOT / 'backend', 'gateway.log',
           {'PHYSIOS_VAR_DIR': str(work / 'var'), 'PHYSIOS_DATASET_ROOTS': str(work / 'ds'),
            'PHYSIOS_DATA_DIR': str(work / 'data'),
            'PHYSIOS_CONFIG': str(work / 'none.env')})

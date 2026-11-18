@@ -138,10 +138,13 @@ class WS:
 
 
 def _mask_fast(data, mask):
-    import numpy as np
-    a = np.frombuffer(data, dtype=np.uint8)
-    m = np.frombuffer((mask * (len(data) // 4 + 1))[:len(data)], dtype=np.uint8)
-    return (a ^ m).tobytes()
+    """XOR ``data`` with the 4-byte websocket mask. Standard library only: this client also
+    runs in the training service, whose Python has no numpy (one big-integer XOR is fast)."""
+    n = len(data)
+    if not n:
+        return b''
+    m = (mask * (n // 4 + 1))[:n]
+    return (int.from_bytes(data, 'big') ^ int.from_bytes(m, 'big')).to_bytes(n, 'big')
 
 
 class Bridge:

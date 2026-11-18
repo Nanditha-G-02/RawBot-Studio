@@ -100,3 +100,29 @@ def test_relay_closes_a_failed_connection_before_reconnecting():
     fails = iter([False])
     r.tick()
     assert FakeBridge.made[1].closed and len(FakeBridge.made) == 3
+
+
+def test_websocket_masking_needs_no_numpy(monkeypatch):
+    # the training service runs on a plain Python; numpy must not be needed to talk to rosbridge
+    import sys
+    monkeypatch.setitem(sys.modules, 'numpy', None)      # any 'import numpy' now fails
+    for data in (b'', b'a', b'abcd', b'{"op": "subscribe"}' * 50, bytes(range(256)) * 300):
+        mask = b'\x01\x80\x7f\xff'
+        out = rw._mask_fast(data, mask)
+        assert out == bytes(b ^ mask[i % 4] for i, b in enumerate(data))
+        assert rw._mask_fast(out, mask) == data
+
+
+def test_hardware_status_path_imports_without_numpy():
+    # run the service's ROS clients in a child Python where numpy cannot be imported
+    import subprocess
+    import sys
+    code = ('import sys; sys.modules["numpy"] = None\n'
+            'from physios_trainer.rollout_worker import WS, Bridge, drop, _mask_fast\n'
+            'from physios_trainer.hardware import manager, relay, simbot, kinematics\n'
+            'assert _mask_fast(b"xyz", b"abcd") == bytes([0x19, 0x1b, 0x19])\n'
+            'print("ok")\n')
+    import os
+    r = subprocess.run([sys.executable, '-c', code], capture_output=True, text=True,
+                       cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    assert r.returncode == 0 and r.stdout.strip() == 'ok', r.stderr[-800:]
