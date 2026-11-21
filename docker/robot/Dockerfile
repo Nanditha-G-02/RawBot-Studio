@@ -30,6 +30,8 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 ENV DEBIAN_FRONTEND=noninteractive \
     PIP_BREAK_SYSTEM_PACKAGES=1 \
     PIP_NO_CACHE_DIR=1 \
+    PIP_DEFAULT_TIMEOUT=180 \
+    PIP_RETRIES=10 \
     COLCON_WS=/root/ros2_ws \
     PHYSIOS_CONTAINER_DATA=/physios/data \
     PHYSICAL_AI_MANAGER_DATA=/workspace/physios \
