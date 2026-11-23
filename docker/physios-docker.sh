@@ -3,6 +3,8 @@
 #   ./physios-docker.sh build [gateway|robot|all]   build images (default: gateway)
 #   ./physios-docker.sh up [--with-robot]           start (http://127.0.0.1:8700)
 #   ./physios-docker.sh robot-up | robot-down       start/stop only the robot runtime
+#   ./physios-docker.sh xarm-build                  build the UFACTORY arm driver image
+#   ./physios-docker.sh xarm-up | xarm-down         start/stop it (PHYSIOS_XARM_IP in physios.env)
 #   ./physios-docker.sh down                        stop and remove the containers (data kept)
 #   ./physios-docker.sh logs [gateway|robot]        follow a log
 #   ./physios-docker.sh shell                       shell in the robot runtime (ROS sourced)
@@ -52,7 +54,12 @@ case "${1:-}" in
     wait_gateway ;;
   robot-up) "${DC[@]}" --profile robot up -d physios-robot ;;
   robot-down) "${DC[@]}" --profile robot stop physios-robot ;;
-  down) "${DC[@]}" --profile robot down ;;
+  xarm-build) "${DC[@]}" --profile xarm build physios-xarm ;;
+  xarm-up)
+    [[ -n "${PHYSIOS_XARM_IP:-}" ]] || { echo "set PHYSIOS_XARM_IP (the arm's address) in configuration/physios.env" >&2; exit 2; }
+    "${DC[@]}" --profile xarm up -d physios-xarm ;;
+  xarm-down) "${DC[@]}" --profile xarm stop physios-xarm ;;
+  down) "${DC[@]}" --profile robot --profile xarm down ;;
   logs) "${DC[@]}" --profile robot logs -f "physios-${2:-gateway}" ;;
   shell) docker exec -it physios-robot physios-robot shell ;;
   status) "${DC[@]}" --profile robot ps

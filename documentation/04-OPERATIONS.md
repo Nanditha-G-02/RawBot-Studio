@@ -143,6 +143,26 @@ The robot server lists one robot type per `<robot>_config.yaml`. The built-in on
 
 It is installed at every container start and survives image rebuilds.
 
+### 4.3a UFACTORY arms (Lite6, xArm, 850)
+
+UFACTORY's driver runs in its own optional container, `physios-xarm`: UFACTORY's `xarm_ros2`
+(jazzy branch, pinned) in ros2_control mode on RawBot Studio's ROS graph (Jazzy, Zenoh, domain 30).
+Nothing is installed on the host, so an existing ROS 2 (e.g. Humble) setup there is untouched.
+
+1. Connect the controller by Ethernet and give the PC an address on its network (e.g.
+   `192.168.1.100/24`); `ping` the arm.
+2. In `configuration/physios.env`: `PHYSIOS_XARM_IP=<arm address>` (and `PHYSIOS_XARM_TYPE`,
+   `PHYSIOS_XARM_GRIPPER` if not a Lite6 without gripper).
+3. `./docker/physios-docker.sh xarm-build` once, then, with the robot runtime running,
+   `./docker/physios-docker.sh xarm-up` (`xarm-down` to stop).
+4. Robot configuration of the custom robot: joint state topic `/ufactory/joint_states`, command
+   topic `/lite6_traj_controller/joint_trajectory` (`xarm6_traj_controller`, ... for other arms),
+   ROS joints `joint1`..`joint6`, direction +1, units rad.
+
+On start the driver clears controller errors, **enables the motors** and holds the current pose
+(servo mode): the arm does not move, but it is powered. Keep the arm's emergency stop at hand. Do
+not run UFACTORY's own driver or MoveIt launches at the same time.
+
 ### 4.4 Robot setup: from robot to Planning
 
 Before Planning, RawBot Studio walks you through five steps (Robots → **Robot setup**, or from

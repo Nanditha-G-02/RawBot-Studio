@@ -70,5 +70,22 @@ services:
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
       - /etc/localtime:/etc/localtime:ro
 
+  # optional UFACTORY arm driver (Lite6 / xArm / 850), same ROS graph as physios-robot
+  physios-xarm:
+    profiles: [xarm]
+    build:
+      context: ..
+      dockerfile: docker/xarm/Dockerfile
+    image: physios-xarm:2.0.0
+    container_name: physios-xarm
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      ROS_DOMAIN_ID: ${PHYSIOS_ROS_DOMAIN_ID:-30}
+      PHYSIOS_XARM_IP: ${PHYSIOS_XARM_IP:-}
+      PHYSIOS_XARM_TYPE: ${PHYSIOS_XARM_TYPE:-lite6}
+      PHYSIOS_XARM_GRIPPER: ${PHYSIOS_XARM_GRIPPER:-none}
+      PHYSIOS_ROBOT_START_ZENOH: "0"
+
 volumes:
   physios-var:

@@ -2,6 +2,14 @@
 
 ## 2.0.0, renamed (2026-11-13)
 
+* **UFACTORY arms (Lite6, xArm, 850):** optional `physios-xarm` container with UFACTORY's
+  `xarm_ros2` (jazzy, pinned) in ros2_control mode on RawBot Studio's ROS graph
+  (`physios-docker.sh xarm-build | xarm-up | xarm-down`, `PHYSIOS_XARM_IP`). Not yet run against a
+  real arm.
+* **Robot image on a fresh machine:** pip timeouts and retries; `huggingface-hub<1.0` and the base
+  image's torch pinned (endless backtracking / `ResolutionImpossible`); rosapi started with
+  rosbridge (command-ownership check).
+
 * **Fix: rosbridge ran out of file handles (`Errno 24 Too many open files`).** The training
   service's ROS clients (status watch, follower relay, simulated robot) replaced a failed
   rosbridge connection without closing it; each stale client kept its socket and subscriptions on
