@@ -529,6 +529,17 @@ UNLOCKS = {
 }
 
 
+def read_only(profile):
+    """A robot RawBot Studio never commands (command interface 'none'), e.g. an arm moved by
+    hand as the leader: its joints are only read. The supervised motion test (Stage 3) does not
+    apply, so recording and the server export need only a registered URDF and a configuration
+    without errors."""
+    cfg = profile.get('config') or {}
+    errs = [i for i in (profile.get('config_issues') or []) if i['level'] == 'error']
+    return bool(cfg) and cfg.get('command_interface') == 'none' and not errs and \
+        profile.get('state') == 'registered'
+
+
 def summarize(profile):
     cfg = profile.get('config')
     ver = profile.get('verifications') or {}
@@ -555,7 +566,11 @@ def summarize(profile):
     st(2, 'ROS verified', stage >= 2, b2, r.get('at'),
        r.get('checks'))
     b3 = []
-    if cfg and cfg['command_interface'] == 'none':
+    ro = read_only(profile)
+    if ro:
+        b3.append('Not needed: RawBot Studio sends this robot no commands (command interface: '
+                  'none), it only reads its joints.')
+    elif cfg and cfg['command_interface'] == 'none':
         b3.append('Set a command interface.')
     if cfg and not cfg['calibration']['done']:
         b3.append('Mark calibration as done.')
@@ -566,8 +581,10 @@ def summarize(profile):
        h.get('result'))
     d = ver.get('data') or {}
     st(4, 'Data & training ready', stage >= 4, [], d.get('at'), d.get('checks'))
-    allowed = {'configure': stage >= 1, 'connect': stage >= 2, 'hardware_test': stage >= 2,
-               'record': stage >= 3, 'export_server_config': stage >= 3, 'train': stage >= 4}
+    allowed = {'configure': stage >= 1, 'connect': stage >= 2,
+               'hardware_test': stage >= 2 and not ro,
+               'record': stage >= 3 or (ro and stage >= 1),
+               'export_server_config': stage >= 3 or (ro and stage >= 1), 'train': stage >= 4}
     summary = '%d/4' % stage
     return {'stage': stage, 'stages': stages, 'allowed': allowed, 'fingerprints': fps,
-            'stages_summary': summary}
+            'stages_summary': summary, 'read_only': ro}

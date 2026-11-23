@@ -853,11 +853,18 @@ function CustomVerify({ customId, onConfirmed, footer }) {
       setBusy(false);
     }
   };
+  // a robot RawBot Studio never commands (command interface none: a leader moved by hand) needs
+  // no ROS follower check or motion test before it is used
+  const ro = Boolean(robot.read_only || robot.readiness?.read_only);
   const checks = [
     { key: 'model', title: 'Model registered', detail: stage >= 1 ? 'Stage 1 · URDF registered' : 'Register the model in step 2.', state: stage >= 1 ? 'ok' : 'fail' },
     { key: 'config', title: 'Robot configuration saved', detail: robot.config ? 'Joints, topics and units are set.' : 'Fill in the Robot configuration below and save it.', state: robot.config ? 'ok' : 'fail' },
-    { key: 'ros', title: 'ROS checks (Stage 2)', detail: stage >= 2 ? 'Topics and joints match the model.' : 'Run the ROS checks under Robot readiness.', state: stage >= 2 ? 'ok' : 'fail' },
-    { key: 'hw', title: 'Hardware verified (Stage 3)', detail: stage >= 3 ? 'The supervised one-joint test passed.' : 'Run the supervised hardware test under Robot readiness.', state: stage >= 3 ? 'ok' : 'fail' },
+    ro && stage < 2
+      ? { key: 'ros', title: 'ROS checks (Stage 2)', detail: 'Optional: RawBot Studio only reads this robot.', state: 'ok' }
+      : { key: 'ros', title: 'ROS checks (Stage 2)', detail: stage >= 2 ? 'Topics and joints match the model.' : 'Run the ROS checks under Robot readiness.', state: stage >= 2 ? 'ok' : 'fail' },
+    ro && stage < 3
+      ? { key: 'hw', title: 'Hardware verified (Stage 3)', detail: 'Not needed: no commands are sent to this robot (command interface: none).', state: 'ok' }
+      : { key: 'hw', title: 'Hardware verified (Stage 3)', detail: stage >= 3 ? 'The supervised one-joint test passed.' : 'Run the supervised hardware test under Robot readiness.', state: stage >= 3 ? 'ok' : 'fail' },
     {
       key: 'server',
       title: onServer ? 'Known to the robot server' : 'Not on the robot server yet',
@@ -867,7 +874,7 @@ function CustomVerify({ customId, onConfirmed, footer }) {
           : 'Use it as the active robot type to continue.'
         : 'After Stage 3: Export server config (Robot readiness), save it in data/robot-config/, restart the robot runtime, then press Refresh.',
       state: onServer ? (confirmed ? 'ok' : 'warn') : 'fail',
-      action: onServer && !confirmed && stage >= 3 ? { label: busy ? 'Setting…' : 'Use this robot', run: useIt } : !onServer ? { label: 'Refresh', run: types.reload } : null,
+      action: onServer && !confirmed && (stage >= 3 || ro) ? { label: busy ? 'Setting…' : 'Use this robot', run: useIt } : !onServer ? { label: 'Refresh', run: types.reload } : null,
     },
   ];
   return (

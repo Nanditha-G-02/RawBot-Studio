@@ -146,9 +146,10 @@ export default function HomePage() {
       return;
     }
     // A server robot type generated from a custom robot profile (exported at Stage 3) may only
-    // be used while that profile is still hardware-verified. Built-in robots are unaffected.
+    // be used while that profile is still hardware-verified - unless RawBot Studio never
+    // commands it (command interface 'none': a leader moved by hand). Built-ins are unaffected.
     const custom = customRobots.find((r) => r.id.toLowerCase().replace(/[^a-z0-9_]/g, '_') === selected);
-    if (custom && !(custom.state === 'registered' && (custom.stage || 0) >= 3)) {
+    if (custom && !(custom.state === 'registered' && ((custom.stage || 0) >= 3 || custom.read_only))) {
       toast.error(`${custom.name} is not hardware-verified (Stage 3). Finish its readiness checks first.`, { id: 'custom-gate' });
       return;
     }

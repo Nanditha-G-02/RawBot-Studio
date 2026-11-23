@@ -217,3 +217,24 @@ def test_replace_resets_all_stages(reg):
     st.validate(rid)
     p = st.register(rid)
     assert p['stage'] == 1 and p['config']['joints']
+
+
+def test_read_only_robot_needs_no_motion_test(reg):
+    """A robot RawBot Studio never commands (command interface 'none', e.g. a UFACTORY arm moved
+    by hand as the leader) can be exported and recorded after Stage 1; it can never get the
+    hardware test. A commanded robot still needs Stage 3."""
+    st, rid = reg
+    with pytest.raises(RobotError, match='Stage 3'):
+        st.save_config(rid, good_cfg(st, rid))
+        st.server_config(rid)
+    p = st.save_config(rid, good_cfg(st, rid, command_interface='none', command_topic='',
+                                      leader_topic='/ufactory/joint_states'))
+    r = st.get(rid)['readiness']
+    assert r['read_only'] and r['allowed']['export_server_config'] and r['allowed']['record']
+    assert not r['allowed']['hardware_test']
+    assert 'Not needed' in r['stages'][2]['blockers'][0]
+    assert [x for x in st.list() if x['id'] == rid][0]['read_only']
+    y = st.server_config(rid)
+    assert 'leader:/ufactory/joint_states' in y['yaml']
+    # a configuration error makes it not read-only (nothing is exported from a broken config)
+    assert p['config']['command_interface'] == 'none'

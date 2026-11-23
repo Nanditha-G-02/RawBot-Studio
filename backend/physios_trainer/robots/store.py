@@ -79,7 +79,7 @@ class RobotStore:
                                       'state', 'created_at', 'updated_at', 'connected')} | {
             'validation_status': v.get('status'), 'links': s.get('links'),
             'joints': s.get('joints'), 'dof': s.get('dof'), 'stage': p.get('stage', 0),
-            'readiness': '%d/4' % (p.get('stage') or 0)}
+            'readiness': '%d/4' % (p.get('stage') or 0), 'read_only': rd.read_only(p)}
 
     def list(self):
         out = []
@@ -502,7 +502,8 @@ class RobotStore:
     def server_config(self, rid):
         with self.lock:
             p = self._load(rid)
-            self._need_stage(p, 3, 'Exporting the server configuration')
+            # a robot that is only read (no commands) needs no motion test before export
+            self._need_stage(p, 1 if rd.read_only(p) else 3, 'Exporting the server configuration')
             key, text = rd.server_config_yaml(p, self._cfg_ok(p))
             return {'robot_type': key, 'filename': '%s_config.yaml' % key, 'yaml': text}
 

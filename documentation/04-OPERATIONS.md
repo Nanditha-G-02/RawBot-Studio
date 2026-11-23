@@ -167,7 +167,9 @@ not run UFACTORY's own driver or MoveIt launches at the same time.
 `PHYSIOS_XARM_MODE=leader`. The driver then publishes only the arm's joints (100 Hz,
 `/ufactory/joint_states`) and puts the arm in UFACTORY **manual mode** (gravity-compensated, moved
 by hand); stopping the container returns it to position mode, holding its pose. In the robot
-configuration: **Leader / teleop topic** `/ufactory/joint_states`, **Joint state topic** a topic
+configuration: **Command interface** `none` (RawBot Studio never commands it, so the Stage 3
+motion test does not apply and the robot can be exported and used once its configuration has no
+errors), **Leader / teleop topic** `/ufactory/joint_states`, **Joint state topic** a topic
 nothing else publishes (the simulated follower's, e.g. `/rawbot/follower/joint_states`), and the
 cameras (e.g. `scene` and `wrist`, CompressedImage topics no real camera publishes: they are
 rendered from the simulated follower). Hardware configuration: **Physical Leader + Simulated
