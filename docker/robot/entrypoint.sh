@@ -19,8 +19,32 @@ mkdir -p "$DATA/huggingface/lerobot" "$DATA/outputs/train" "$DATA/robot-config" 
 # operator robot configurations (data/robot-config/*_config.yaml) next to the built-in ones
 SHARE="$(ros2 pkg prefix physical_ai_server)/share/physical_ai_server/config"
 shopt -s nullglob
+# the container keeps its files across restarts: first remove the operator configs copied last
+# time, so an edited, fixed or deleted file in data/robot-config takes effect
+if [[ -f "$SHARE/.physios-operator-configs" ]]; then
+  while read -r old; do [[ -n "$old" ]] && rm -f "$SHARE/$old"; done < "$SHARE/.physios-operator-configs"
+fi
+: > "$SHARE/.physios-operator-configs"
 for f in "$DATA"/robot-config/*_config.yaml; do
-  cp -f "$f" "$SHARE/" && echo "[physios-robot] robot config: $(basename "$f")"
+  # every config is loaded as parameters of one node: a file ROS 2 cannot load (an empty list,
+  # bad YAML) would stop the whole robot server, so such a file is skipped with the reason
+  if why="$(python3 - "$f" <<'PY'
+import sys, yaml
+try:
+    d = yaml.safe_load(open(sys.argv[1]))
+    robots = d['physical_ai_server']['ros__parameters']
+    bad = ['%s.%s' % (r, k) for r, ps in robots.items() for k, v in (ps or {}).items()
+           if v is None or v == [] or (isinstance(v, dict) and any(x in (None, []) for x in v.values()))]
+    print('empty value: ' + ', '.join(bad) if bad else '')
+except Exception as e:  # noqa: BLE001
+    print('cannot read it: %s' % e)
+PY
+)" && [[ -z "$why" ]]; then
+    cp -f "$f" "$SHARE/" && basename "$f" >> "$SHARE/.physios-operator-configs" \
+      && echo "[physios-robot] robot config: $(basename "$f")"
+  else
+    echo "[physios-robot] SKIPPED robot config $(basename "$f") ($why); fix it and restart"
+  fi
 done
 shopt -u nullglob
 

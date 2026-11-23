@@ -504,8 +504,11 @@ def server_config_yaml(profile, cfg):
              'physical_ai_server:', '  ros__parameters:', '    %s:' % key,
              '      observation_list:']
     lines += ['        - %s' % c['name'] for c in cfg['cameras']] + ['        - state', '']
+    # ROS 2 cannot load an empty list parameter (the whole robot server fails to start), so an
+    # empty list is written as [''] like the built-in configs; the server skips such entries
     lines += ['      camera_topic_list:']
-    lines += ['        - %s:%s' % (c['name'], full_topic(cfg, c['topic'])) for c in cfg['cameras']]
+    lines += ['        - %s:%s' % (c['name'], full_topic(cfg, c['topic'])) for c in cfg['cameras']] \
+        or ["        - ''"]
     lines += ['', '      joint_topic_list:',
               '        - follower:%s' % full_topic(cfg, cfg['joint_state_topic'])]
     if cfg.get('leader_topic'):
@@ -513,6 +516,7 @@ def server_config_yaml(profile, cfg):
     lines += ['', '      joint_list:', '        - leader', '', '      joint_order:',
               '        leader:']
     lines += ['          - %s' % j['ros_joint'] for j in cfg['joints'] if j['enabled']]
+    lines += ['', '      rosbag_extra_topic_list:', "        - ''"]
     return key, '\n'.join(lines) + '\n'
 
 

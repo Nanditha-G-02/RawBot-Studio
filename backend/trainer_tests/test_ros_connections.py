@@ -126,3 +126,16 @@ def test_hardware_status_path_imports_without_numpy():
     r = subprocess.run([sys.executable, '-c', code], capture_output=True, text=True,
                        cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     assert r.returncode == 0 and r.stdout.strip() == 'ok', r.stderr[-800:]
+
+
+def test_server_config_without_cameras_has_no_empty_lists():
+    # ROS 2 cannot load an empty list parameter: one such file stopped the whole robot server
+    import yaml
+    from physios_trainer.robots.readiness import server_config_yaml
+    cfg = {'cameras': [], 'joint_state_topic': '/ufactory/joint_states', 'leader_topic': '',
+           'namespace': '', 'joints': [{'ros_joint': 'joint%d' % i, 'enabled': True}
+                                       for i in range(1, 7)]}
+    key, text = server_config_yaml({'id': 'lite6', 'name': 'Lite6'}, cfg)
+    d = yaml.safe_load(text)['physical_ai_server']['ros__parameters'][key]
+    assert d['camera_topic_list'] == [''] and d['rosbag_extra_topic_list'] == ['']
+    assert all(v not in (None, []) for v in d.values())
