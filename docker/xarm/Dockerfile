@@ -8,8 +8,9 @@
 #
 # Topics (Lite6, hw_ns 'ufactory'): /ufactory/joint_states and /joint_states (state),
 # /lite6_traj_controller/joint_trajectory (commands, trajectory_msgs/JointTrajectory).
-# The container moves nothing by itself: the trajectory controller holds the current pose until
-# RawBot Studio (supervised hardware test, jog, rollout) sends a command.
+# Follower mode moves nothing by itself: the trajectory controller holds the current pose until
+# RawBot Studio (supervised hardware test, jog, rollout) sends a command. Leader mode
+# (PHYSIOS_XARM_MODE=leader) puts the arm in UFACTORY manual mode and only publishes its joints.
 
 ARG BASE_IMAGE=ros:jazzy-ros-base
 FROM ${BASE_IMAGE}

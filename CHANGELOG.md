@@ -2,6 +2,11 @@
 
 ## 2.0.0, renamed (2026-11-13)
 
+* **An arm's own driver as the leader.** A leader topic carrying JointState (the arm's joints,
+  e.g. a UFACTORY arm in manual mode) is recognised (topic type from rosapi) and handled like the
+  serial leader: the simulated follower copies it, it is recorded as the action. `physios-xarm`
+  gains `PHYSIOS_XARM_MODE=leader` (manual mode, 100 Hz joint states, nothing commanded).
+
 * **UFACTORY arms (Lite6, xArm, 850):** optional `physios-xarm` container with UFACTORY's
   `xarm_ros2` (jazzy, pinned) in ros2_control mode on RawBot Studio's ROS graph
   (`physios-docker.sh xarm-build | xarm-up | xarm-down`, `PHYSIOS_XARM_IP`). Not yet run against a

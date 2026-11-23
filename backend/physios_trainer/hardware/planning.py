@@ -79,9 +79,15 @@ def options(mode, arms, caps, sim, selection=None, cameras=None, extra=None, rob
     rctl = robot.get('controls') or {}
     used = MODES.get(mode, MODES['leader_follower'])['arms']
     L, F = arms.get('leader') or {}, arms.get('follower') or {}
-    lr = L.get('state') == 'connected' and L.get('source') == 'ros'
-    # the leader read by RawBot Studio's own serial session drives the simulated robot too
-    ls = L.get('state') == 'connected' and L.get('source') == 'serial' and 'leader' in used
+    # a ROS leader that sends commands (bridge.py: JointTrajectory) vs one whose driver only
+    # publishes its joints (JointState): the latter is read like the serial session below
+    state_leader = L.get('state') == 'connected' and L.get('source') == 'ros' and \
+        L.get('ros_kind') == 'state'
+    lr = L.get('state') == 'connected' and L.get('source') == 'ros' and not state_leader
+    # the leader read by RawBot Studio itself (serial session, or a joint-state topic) drives
+    # the simulated robot too
+    ls = L.get('state') == 'connected' and (L.get('source') == 'serial' or state_leader) \
+        and 'leader' in used
     fr = F.get('state') == 'connected' and F.get('source') == 'ros'
     # follower joint states on ROS: bridge.py, or RawBot Studio relaying its serial session
     fs = fr or bool(extra.get('follower_relay'))
@@ -232,7 +238,7 @@ def options(mode, arms, caps, sim, selection=None, cameras=None, extra=None, rob
         action_param = 'leader_state'
         li = sim.get('leader_in') or {}
         if not reason and sim_on and li and li.get('stale'):
-            reason = 'No fresh joint readings from the leader arm (serial session).'
+            reason = 'No fresh joint readings from the leader arm.'
         if not reason and extra.get('leader_state_supported') is False:
             reason = ('The robot runtime cannot record the leader read by RawBot Studio yet. '
                       'Rebuild it: ./docker/physios-docker.sh build robot')

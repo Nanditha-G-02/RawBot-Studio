@@ -179,6 +179,9 @@ class Bridge:
         self.ws.send({'op': 'subscribe', 'topic': topic, 'type': typ,
                       'throttle_rate': throttle_ms, 'queue_length': 1})
 
+    def unsubscribe(self, topic):
+        self.ws.send({'op': 'unsubscribe', 'topic': topic})
+
     def advertise(self, topic, typ):
         self.ws.send({'op': 'advertise', 'topic': topic, 'type': typ})
 

@@ -163,6 +163,18 @@ On start the driver clears controller errors, **enables the motors** and holds t
 (servo mode): the arm does not move, but it is powered. Keep the arm's emergency stop at hand. Do
 not run UFACTORY's own driver or MoveIt launches at the same time.
 
+**The UFACTORY arm as a leader** (moved by hand; a simulated follower copies it): set
+`PHYSIOS_XARM_MODE=leader`. The driver then publishes only the arm's joints (100 Hz,
+`/ufactory/joint_states`) and puts the arm in UFACTORY **manual mode** (gravity-compensated, moved
+by hand); stopping the container returns it to position mode, holding its pose. In the robot
+configuration: **Leader / teleop topic** `/ufactory/joint_states`, **Joint state topic** a topic
+nothing else publishes (the simulated follower's, e.g. `/rawbot/follower/joint_states`), and the
+cameras (e.g. `scene` and `wrist`, CompressedImage topics no real camera publishes: they are
+rendered from the simulated follower). Hardware configuration: **Physical Leader + Simulated
+Follower**. RawBot Studio recognises a leader topic that carries JointState (an arm's own joints,
+not bridge.py's commands) and records it as the action (`leader_state`), like a leader it reads
+over serial.
+
 ### 4.4 Robot setup: from robot to Planning
 
 Before Planning, RawBot Studio walks you through five steps (Robots → **Robot setup**, or from

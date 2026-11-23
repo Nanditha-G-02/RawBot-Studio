@@ -451,6 +451,44 @@ def test_leader_sim_with_bridge_uses_the_leader_topic(world, hw):
     assert hw.status(RT)['mode'] == 'leader_sim'
 
 
+def test_leader_sim_with_a_joint_state_leader(world, hw):
+    """An arm whose own driver publishes its joints (sensor_msgs/JointState, e.g. a UFACTORY
+    arm in manual mode, moved by hand) is the leader: the simulated follower copies it, its
+    joints are republished and recorded as the action (leader_state), never commanded."""
+    hw.setup(RT, mode='leader_sim')
+    lt = hw.reg.setup(RT)['topics']['leader']
+    hw.ros.kinds = {lt: 'state'}
+    hw.ros.publish(lt, J, [0.5, 0.0, 0.0, 0.0, 0.0, -0.3], publisher='/ufactory_driver')
+    st = hw.status(RT)
+    L = st['arms']['leader']
+    assert L['state'] == 'connected' and L['source'] == 'ros' and L['ros_kind'] == 'state'
+    assert 'driver publishes its joints' in L['detail']
+    p = st['planning']
+    assert p['config'] == 'leader_sim' and st['sim']['running']
+    assert p['selection'] == {'action': 'leader', 'target': 'sim', 'observation': 'sim'}
+    assert p['record']['action_param'] == 'leader_state'
+    assert st['sim']['drive'] == 'leader'
+    for _ in range(40):
+        hw.sim.step(1 / 30)
+    li = hw.sim.view()['leader_in']
+    assert li['source'] == 'ros' and not li['stale']
+    assert hw.sim.pos[0] == pytest.approx(0.5, abs=1e-3)
+    assert hw.sim.pos[5] == pytest.approx(-0.3, abs=1e-3)
+    st = hw.status(RT)
+    assert st['planning']['record']['available'], st['planning']['record']['reason']
+    pub = Pub()
+    hw.sim.br, hw.sim._advertised = pub, set()
+    hw.sim.bridge_factory = lambda url: pub
+    hw.sim._publish()
+    topics = [t for t, _ in pub.sent]
+    assert '/rawbot/leader/joint_states' in topics and lt not in topics
+    assert dict(pub.sent)['/rawbot/leader/joint_states']['position'][0] == pytest.approx(0.5)
+    # the leader arm stops publishing: the simulated follower holds, recording is blocked
+    hw.ros.silence(lt)
+    st = hw.status(RT)
+    assert not st['planning']['record']['available']
+
+
 def test_jog_stop_is_not_overwritten_by_a_heartbeat(tmp_path, hw):
     """Heartbeats and Stop come on parallel requests; once Stop is written it stays."""
     import json as _json

@@ -57,6 +57,13 @@ class FakeRos:
             return None, [], []
         return time.time() - hit[0], hit[1], hit[2]
 
+    def kind(self, topic):
+        """Like RosWatch.kind: 'command' (JointTrajectory), 'state' (JointState) or None."""
+        if topic not in self.msgs:
+            return None
+        return getattr(self, 'kinds', {}).get(topic) or (
+            'command' if 'trajectory' in topic else 'state')
+
     def foreign_publishers(self, topic):
         if topic in self.unknown:
             return None

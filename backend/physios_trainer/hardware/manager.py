@@ -85,6 +85,7 @@ class RosWatch:
         self.error = None
         self.lock = threading.RLock()
         self._subscribed = set()
+        self._types = {}            # topic -> type it is subscribed with
         self._stop = False
         threading.Thread(target=self._loop, daemon=True).start()
 
@@ -111,6 +112,7 @@ class RosWatch:
                 try:
                     self.br = Bridge(self.url)
                     self._subscribed = set()
+                    self._types = {}
                     self.connected = True
                     self.error = None
                 except Exception as e:  # noqa: BLE001
@@ -122,14 +124,27 @@ class RosWatch:
             try:
                 for t, typ in topics.items():
                     if t not in self._subscribed:
+                        typ = self._real_type(t) or typ
                         self.br.subscribe(t, typ, throttle_ms=100)
                         self._subscribed.add(t)
+                        self._types[t] = typ
                 for t in frames:
                     if t not in self._subscribed:
                         self.br.subscribe(t, 'sensor_msgs/msg/CompressedImage', throttle_ms=1000)
                         self._subscribed.add(t)
                 if time.time() - last_pub > 2.5:
                     last_pub = time.time()
+                    # a role's usual type is a guess (a leader is a JointTrajectory from
+                    # bridge.py, but an arm's own driver publishes JointState): a topic that
+                    # stays silent is re-subscribed with the type it really has
+                    for t in list(topics):
+                        if t in self.br.latest:
+                            continue
+                        real = self._real_type(t)
+                        if real and real != self._types.get(t):
+                            self.br.unsubscribe(t)
+                            self.br.subscribe(t, real, throttle_ms=100)
+                            self._types[t] = real
                     for t, typ in list(topics.items()) + [(t, '') for t in pub_only]:
                         if 'JointTrajectory' in typ or t in self.pub_topics:
                             try:
@@ -143,6 +158,23 @@ class RosWatch:
                 self.connected = False
                 self.br = drop(self.br)
             time.sleep(0.25)
+
+    def _real_type(self, topic):
+        """The topic's type from rosapi, or '' (no rosapi, topic not there yet)."""
+        try:
+            return (self.br.call('/rosapi/topic_type', {'topic': topic}, timeout=1.0)
+                    .get('type') or '')
+        except Exception:  # noqa: BLE001 - rosapi missing or slow: keep the usual type
+            return ''
+
+    def kind(self, topic):
+        """'state' (sensor_msgs/JointState: an arm's own joints), 'command'
+        (JointTrajectory: bridge.py's leader commands) or None (no message yet)."""
+        br = self.br
+        hit = br.latest.get(topic) if br else None
+        if not hit:
+            return None
+        return 'command' if 'joint_names' in hit[1] else 'state'
 
     def sample(self, topic):
         """(age_s, names, positions) or (None, [], [])."""
@@ -798,7 +830,14 @@ class Hardware:
         # published for the recorder; with bridge.py the leader topic is used as before
         L = arms['leader']
         serial_leader = L.get('state') == 'connected' and L.get('source') == 'serial'
-        sampler = self._leader_sampler(robot_type, setup) if serial_leader else None
+        # an arm whose own driver publishes its joints (JointState, e.g. a UFACTORY arm in
+        # manual mode) is read the same way: the simulated follower copies it and its joints
+        # are republished for the recorder as the action (leader_state)
+        state_leader = L.get('state') == 'connected' and L.get('source') == 'ros' and \
+            L.get('ros_kind') == 'state'
+        sampler = self._leader_sampler(robot_type, setup) if serial_leader else \
+            self._ros_leader_sampler(setup) if state_leader else None
+        serial_leader = serial_leader or state_leader
         self.sim.ensure(robot_type, run and rc['sim']['available'], setup['topics'],
                         names=rc['names'] or names,
                         state_topic=ft if (run and not own_reason) else None,
@@ -895,6 +934,17 @@ class Hardware:
 
     def _leader_sampler(self, robot_type, setup):
         return self._arm_sampler(robot_type, setup, 'leader')
+
+    def _ros_leader_sampler(self, setup):
+        """Leader joints from the arm driver's JointState topic (already in radians)."""
+        topic = setup['topics'].get('leader')
+
+        def sample():
+            age, names, vals = self.ros.sample(topic)
+            if age is None:
+                return None, [], [], {}
+            return age, names, vals, {'source': 'ros', 'topic': topic}
+        return sample
 
     def _arm_sampler(self, robot_type, setup, role):
         """Leader joints from RawBot Studio's read-only serial session, in radians: raw
@@ -1010,8 +1060,11 @@ class Hardware:
         elif k in self.monitors:   # session exists but stopped answering
             state, detail = 'lost', mon.get('error') or 'The motors stopped answering.'
         elif live:
-            state, detail = 'connected', 'bridge.py publishes %s.' % card['topic']
             card['source'] = 'ros'
+            card['ros_kind'] = self.ros.kind(card['topic'])
+            state, detail = 'connected', (
+                'The arm\'s driver publishes its joints on %s.' % card['topic']
+                if card['ros_kind'] == 'state' else 'bridge.py publishes %s.' % card['topic'])
         elif self.ever_connected.get(k) and (not dev or port is None or port['holders']):
             state = 'lost'
             detail = ('Unplugged.' if dev and port is None else

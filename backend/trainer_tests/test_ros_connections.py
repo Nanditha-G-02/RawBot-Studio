@@ -139,3 +139,52 @@ def test_server_config_without_cameras_has_no_empty_lists():
     d = yaml.safe_load(text)['physical_ai_server']['ros__parameters'][key]
     assert d['camera_topic_list'] == [''] and d['rosbag_extra_topic_list'] == ['']
     assert all(v not in (None, []) for v in d.values())
+
+
+def test_roswatch_subscribes_with_the_real_topic_type(monkeypatch):
+    """A leader topic is guessed to be a JointTrajectory (bridge.py); an arm driver that
+    publishes JointState there is re-subscribed with its real type (rosapi)."""
+    from physios_trainer.hardware import manager as m
+
+    class Br:
+        made = []
+
+        def __init__(self, url):
+            self.alive = True
+            self.latest = {}
+            self.subs = []
+            self.types = {}
+            Br.made.append(self)
+
+        def subscribe(self, t, typ, throttle_ms=0):
+            self.subs.append((t, typ))
+
+        def unsubscribe(self, t):
+            self.subs.append((t, None))
+
+        def call(self, service, args=None, timeout=3.0):
+            if service == '/rosapi/topic_type':
+                return {'type': self.types.get(args['topic'], '')}
+            return {'publishers': []}
+
+        def close(self):
+            self.alive = False
+    monkeypatch.setattr(rw, 'Bridge', Br)
+    w = m.RosWatch('ws://x')
+    w.watch({'/ufactory/joint_states': 'trajectory_msgs/msg/JointTrajectory'})
+    for _ in range(40):
+        if Br.made and Br.made[0].subs:
+            break
+        time.sleep(0.05)
+    br = Br.made[0]
+    assert br.subs[0] == ('/ufactory/joint_states', 'trajectory_msgs/msg/JointTrajectory')
+    br.types['/ufactory/joint_states'] = 'sensor_msgs/msg/JointState'   # the driver appears
+    for _ in range(80):
+        if ('/ufactory/joint_states', 'sensor_msgs/msg/JointState') in br.subs:
+            break
+        time.sleep(0.05)
+    w._stop = True
+    assert ('/ufactory/joint_states', None) in br.subs
+    assert ('/ufactory/joint_states', 'sensor_msgs/msg/JointState') in br.subs
+    br.latest['/ufactory/joint_states'] = (time.time(), {'name': ['joint1'], 'position': [0.1]})
+    assert w.kind('/ufactory/joint_states') == 'state'
