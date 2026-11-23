@@ -43,6 +43,15 @@ def generate_launch_description():
         output='screen',
     )
 
+    # rosapi (part of rosbridge_suite): RawBot Studio asks it who publishes on the command topic
+    # (command ownership check) and which type a topic has; without it those checks stay unknown
+    rosapi_node = Node(
+        package='rosapi',
+        executable='rosapi_node',
+        name='rosapi',
+        output='screen',
+    )
+
     # Include rosbag_recorder service_bag_recorder node
     rosbag_recorder_node = Node(
         package='rosbag_recorder',
@@ -62,6 +71,7 @@ def generate_launch_description():
     return LaunchDescription([
         physical_ai_server_launch,
         rosbridge_websocket_node,
+        rosapi_node,
         rosbag_recorder_node,
         web_video_server_node
     ])
