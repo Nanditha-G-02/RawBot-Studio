@@ -9,3 +9,12 @@ pandas<3
 pyarrow<26
 # the 1.x container used 4.13
 opencv-python-headless<5
+# huggingface-hub 1.x/2.x dropped the [cli] and [hf-transfer] extras LeRobot 0.2.0 asks for and
+# transformers 4.51 needs < 1.0: without this pip backtracks through every hub release for many
+# minutes and can end in ResolutionImpossible on a fresh machine
+huggingface-hub<1.0
+# keep the base image's CUDA build of PyTorch: never let a dependency upgrade it (a newer torch
+# needs setuptools >= 77, which conflicts with the setuptools pin of the build)
+torch==2.7.0
+torchvision==0.22.0
+torchaudio==2.7.0
