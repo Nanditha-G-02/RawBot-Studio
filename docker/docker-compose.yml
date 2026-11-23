@@ -41,6 +41,9 @@ services:
     build:
       context: ..
       dockerfile: docker/robot/Dockerfile
+      # the build uses the host's network and DNS (some networks block the public DNS servers
+      # Docker falls back to, so apt/pip inside the build could not resolve any host)
+      network: host
       args:
         BASE_IMAGE: ${PHYSIOS_ROBOT_BASE_IMAGE:-robotis/ros:jazzy-ros-base-torch2.7.0-cuda12.8.0-v3}
         INSTALL_TORCH: ${PHYSIOS_ROBOT_INSTALL_TORCH:-0}
@@ -76,6 +79,7 @@ services:
     build:
       context: ..
       dockerfile: docker/xarm/Dockerfile
+      network: host
     image: physios-xarm:2.0.0
     container_name: physios-xarm
     network_mode: host
