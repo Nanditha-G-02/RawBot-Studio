@@ -73,7 +73,9 @@ def _fp(obj):
 
 def movable_joints(profile):
     v = profile.get('validation') or {}
-    return [j for j in (v.get('summary') or {}).get('joint_list') or [] if j['type'] in MOVABLE]
+    # a joint that mimics another follows it: it has no motor of its own to map
+    return [j for j in (v.get('summary') or {}).get('joint_list') or []
+            if j['type'] in MOVABLE and not j.get('mimic')]
 
 
 def default_config(profile):
@@ -84,7 +86,9 @@ def default_config(profile):
         'command_interface': 'joint_trajectory',
         'command_topic': '/arm_controller/joint_trajectory',
         'leader_topic': '', 'driver': '', 'control_frequency_hz': 30,
-        'joints': [{'urdf_joint': j['name'], 'ros_joint': j['name'], 'motor_id': i + 1,
+        'joints': [{'urdf_joint': j['name'],
+                    'ros_joint': 'gripper' if j['name'] == 'sim_gripper' else j['name'],
+                    'motor_id': i + 1,
                     'direction': 1, 'offset': 0.0,
                     'units': 'm' if j['type'] == 'prismatic' else 'rad', 'enabled': True,
                     'soft_lower': j.get('lower'), 'soft_upper': j.get('upper')}

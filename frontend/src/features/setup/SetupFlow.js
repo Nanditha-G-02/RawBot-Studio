@@ -28,7 +28,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import toast from 'react-hot-toast';
 import clsx from 'clsx';
-import { Callout, Field, Segmented, Select, Sheet, Spinner, TextInput } from '../../components/ui';
+import { Callout, Field, NumberInput, Segmented, Select, Sheet, Spinner, TextInput } from '../../components/ui';
 import { useRosServiceCaller } from '../../hooks/useRosServiceCaller';
 import TaskPhase from '../../constants/taskPhases';
 import PageType from '../../constants/pageType';
@@ -42,6 +42,7 @@ import {
   getRobot,
   listRobots,
   registerRobot,
+  setSimGripper,
   updateRobot,
   validateRobot,
 } from '../robots/robotsApi';
@@ -427,6 +428,71 @@ function UploadModel({ customs, onCreated }) {
   );
 }
 
+// A simulated parallel gripper for a model that has none. The leader arm has no gripper of its
+// own, so it is opened and closed with Space (or a button) in the simulation and recorded as the
+// "gripper" joint (metres, 0 = open). Nothing is sent to a real robot.
+function SimGripperCard({ robot, onChanged }) {
+  const has = !!robot.sim_gripper;
+  const [open, setOpen] = useState(80);
+  const [len, setLen] = useState(60);
+  const [busy, setBusy] = useState(false);
+  const run = async (body, done) => {
+    setBusy(true);
+    try {
+      await setSimGripper(robot.id, body);
+      toast.success(done);
+      onChanged();
+    } catch (e) {
+      toast.error(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="rounded-2xl bg-paper p-3.5" data-setup-sim-gripper={has ? 'on' : 'off'}>
+      <div className="flex items-center justify-between">
+        <div className="label">Simulated gripper</div>
+        <span className={has ? 'chip-ok' : 'chip'}>{has ? 'added' : 'none'}</span>
+      </div>
+      {has ? (
+        <>
+          <div className="mt-2 text-[12px] text-ink-3">
+            Opening {Math.round(robot.sim_gripper.opening * 1000)} mm · fingers {Math.round(robot.sim_gripper.finger_length * 1000)} mm, on{' '}
+            <span className="font-mono text-ink">{robot.sim_gripper.attach_link}</span>. Open and close it with the C key in Planning and Record; the
+            opening is recorded as the <span className="font-mono text-ink">gripper</span> joint.
+          </div>
+          <button className="btn-ghost mt-2 text-[11.5px]" disabled={busy} onClick={() => run({ enabled: false }, 'Gripper removed')} data-action="sim-gripper-remove">
+            Remove gripper
+          </button>
+        </>
+      ) : (
+        <>
+          <div className="mt-2 text-[12px] text-ink-3">
+            This model has no gripper. Add one to the simulation so a cube can be picked up and placed. It is not part of the real robot.
+          </div>
+          <div className="mt-2 grid grid-cols-2 gap-2.5">
+            <Field label="Opening (mm)">
+              <NumberInput value={open} onChange={setOpen} min={20} max={250} data-field="gripper-opening" />
+            </Field>
+            <Field label="Finger length (mm)">
+              <NumberInput value={len} onChange={setLen} min={20} max={200} data-field="gripper-finger" />
+            </Field>
+          </div>
+          <button
+            className="btn mt-2.5"
+            disabled={busy}
+            onClick={() => run({ enabled: true, opening: open / 1000, finger_length: len / 1000 }, 'Gripper added')}
+            data-action="sim-gripper-add"
+          >
+            {busy && <Spinner />}
+            Add simulated gripper
+          </button>
+        </>
+      )}
+    </div>
+  );
+}
+
 function DetailsForm({ robot, onSaved }) {
   const [meta, setMeta] = useState({ name: robot.name, manufacturer: robot.manufacturer || '', type: robot.type || 'arm', description: robot.description || '' });
   const [busy, setBusy] = useState(false);
@@ -642,6 +708,7 @@ function StepModel({ view, setView, customs, reloadCustoms }) {
             </div>
           )}
           {!v && !robot.entry_candidates && <Callout tone="warn">The model has not been checked yet.</Callout>}
+          {registered && <SimGripperCard robot={robot} onChanged={() => { load(); reloadCustoms(); }} />}
           <DetailsForm robot={robot} onSaved={() => { load(); reloadCustoms(); }} />
         </div>
       </div>

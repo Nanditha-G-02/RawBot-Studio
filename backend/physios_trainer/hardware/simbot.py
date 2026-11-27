@@ -31,6 +31,7 @@ cannot move a physical arm.
 
 import json
 import math
+import re
 import threading
 import time
 
@@ -51,6 +52,7 @@ HOLD_S = 0.3            # a keyboard / gamepad velocity expires after this
 DEFAULT_SPEED = 1.5     # joint units per second (rad/s for the SO-101 bridge)
 SO101_JOINTS = ['shoulder_pan', 'shoulder_lift', 'elbow_flex', 'wrist_flex', 'wrist_roll',
                 'gripper']
+GRIPPER_NAME = re.compile(r'grip|finger|jaw|claw|pinch', re.I)
 DRIVES = ('manual', 'leader', 'follower', 'script', 'replay')
 
 
@@ -215,6 +217,25 @@ class SimRobot:
         self.drive = 'manual'
         self.rec = None
 
+    def gripper_index(self):
+        """Index of the gripper joint: the one the model's simulated gripper moves, else a
+        joint named like a gripper (the robot's own)."""
+        for i, n in enumerate(self.names):
+            m = self.mapping.get(n)
+            if m and m[0] == 'sim_gripper':
+                return i
+        for i, n in enumerate(self.names):
+            if GRIPPER_NAME.search(n or ''):
+                return i
+        return None
+
+    def _own_gripper(self):
+        """Name of the simulated gripper the operator drives (the leader has none), or None."""
+        for n in self.names:
+            if (self.mapping.get(n) or ('',))[0] == 'sim_gripper':
+                return n
+        return None
+
     def _idx(self, name):
         try:
             return self.names.index(name)
@@ -334,6 +355,24 @@ class SimRobot:
                 self.rec = None
             elif cmd == 'speed':
                 self.speed = max(0.05, min(6.0, float(body.get('speed'))))
+            elif cmd == 'gripper':
+                # open / close the simulated gripper without changing what drives the arm
+                gi = self.gripper_index()
+                if gi is None:
+                    raise ValueError('This simulated robot has no gripper.')
+                act = body.get('state')
+                closed = self.target[gi] <= self.lo[gi] + 0.5 * (self.hi[gi] - self.lo[gi])
+                if act == 'toggle':
+                    act = 'close' if closed else 'open'
+                if act == 'close':
+                    self.target[gi] = self._clamp(gi, self.hi[gi])
+                elif act == 'open':
+                    self.target[gi] = self._clamp(gi, self.lo[gi])
+                elif body.get('value') is not None:
+                    f = max(0.0, min(1.0, float(body['value'])))
+                    self.target[gi] = self._clamp(gi, self.lo[gi] + f * (self.hi[gi] - self.lo[gi]))
+                else:
+                    raise ValueError('Gripper: state open / close / toggle, or a value 0..1.')
             elif cmd == 'limits' and body.get('reset'):
                 # back to the robot model's limits (URDF), +-pi where the model has none
                 dl = getattr(self, 'default_limits', None) or {}
@@ -373,7 +412,8 @@ class SimRobot:
         src = lambda n: pairs.get(n, n)      # noqa: E731 - target joint -> leader joint
         info = {'age_s': None if age is None else round(age, 3), 'names': list(names),
                 'values': [float(v) for v in vals], 'at_limit': [],
-                'missing': [n for n in self.names if src(n) not in names], 'pairs': pairs,
+                'missing': [n for n in self.names if src(n) not in names and
+                            n != self._own_gripper()], 'pairs': pairs,
                 'source': extra.get('source'), 'topic': extra.get('topic'),
                 'ticks': extra.get('ticks'), 'rate_hz': extra.get('rate_hz'),
                 'stale': age is None or age > LEADER_STALE_S}
@@ -578,7 +618,12 @@ class SimRobot:
             li = self.leader_in
             lead = None
             if self.leader_pub and self.drive == 'leader' and li and not li['stale']:
-                lead = joint_state(li['names'], li['values'], [])
+                # a joint the leader arm lacks (the simulated gripper) is part of the action
+                # too: what the operator commanded of it
+                extra = [(n, self.target[i]) for i, n in enumerate(self.names)
+                         if n not in li['names'] and self.mapping.get(n, ('',))[0] == 'sim_gripper']
+                lead = joint_state(list(li['names']) + [n for n, _ in extra],
+                                   list(li['values']) + [v for _, v in extra], [])
         if self.bridge_factory is None:
             return
         try:
@@ -652,6 +697,14 @@ class SimRobot:
                    'state_topic': self.state_topic if self.running else None,
                    'error': self.error if self.running else None,
                    'published': self.published, 'rate_hz': RATE_HZ}
+            gi = self.gripper_index()
+            if gi is not None:
+                span = (self.hi[gi] - self.lo[gi]) or 1.0
+                out['gripper'] = {'joint': self.names[gi], 'closed': self.target[gi] >
+                                  self.lo[gi] + 0.5 * span,
+                                  'value': round((shown[gi] - self.lo[gi]) / span, 3),
+                                  'own': bool((self.mapping.get(self.names[gi]) or [''])[0] ==
+                                              'sim_gripper')}
             if self.script:
                 out['script'] = {'index': self.script['i'], 'count': len(
                     self.script['points']), 'loop': self.script['loop'],

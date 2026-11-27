@@ -112,6 +112,8 @@ class World:
         self.m = self.d = None
         self.lock = threading.Lock()
         self.targets = {}
+        self.mimic = {}
+        self.mimic_act = {}
         self.items = []
 
     def load(self, req):
@@ -154,7 +156,24 @@ class World:
             a.trntype = mj.mjtTrn.mjTRN_JOINT
             a.set_to_position(kp=kp, kv=2 * math.sqrt(kp * arm) + 1)
             self.joints.append(name)
+        self.mimic = {}
         for name, leader, mult, off in mimics:
+            # the follower joint is driven like its leader (both fingers of a gripper squeeze
+            # with the same force, so a cube is centred); the equality keeps them in step
+            if leader in self.joints and name not in self.joints:
+                jm = next((j for j in w.joints if j.name == 'robot/' + name), None)
+                if jm is not None:
+                    prism = jm.type == mj.mjtJoint.mjJNT_SLIDE
+                    kp, arm = (KP_PRISMATIC, ARM_PRISMATIC) if prism else (KP_REVOLUTE,
+                                                                           ARM_REVOLUTE)
+                    jm.armature = arm
+                    jm.frictionloss = 0.0
+                    jm.damping = [0.1, 0, 0]
+                    am = w.add_actuator(name='act_' + name)
+                    am.target = jm.name
+                    am.trntype = mj.mjtTrn.mjTRN_JOINT
+                    am.set_to_position(kp=kp, kv=2 * math.sqrt(kp * arm) + 1)
+                    self.mimic[name] = (leader, mult, off)
             e = w.add_equality()
             e.type = mj.mjtEq.mjEQ_JOINT
             e.name1, e.name2 = 'robot/' + name, 'robot/' + leader
@@ -177,6 +196,7 @@ class World:
         self.qadr = {n: self.m.jnt_qposadr[self.m.joint('robot/' + n).id] for n in self.joints}
         self.vadr = {n: self.m.jnt_dofadr[self.m.joint('robot/' + n).id] for n in self.joints}
         self.act = {n: self.m.actuator('act_' + n).id for n in self.joints}
+        self.mimic_act = {n: self.m.actuator('act_' + n).id for n in self.mimic}
         self.rng = {n: tuple(self.m.jnt_range[self.m.joint('robot/' + n).id]) for n in
                     self.joints}
         self.limited = {n: bool(self.m.jnt_limited[self.m.joint('robot/' + n).id]) for n in
@@ -249,6 +269,10 @@ class World:
             for n, v in self.targets.items():
                 if n in self.act:
                     self.d.ctrl[self.act[n]] = self._clip(n, v)
+            for n, (leader, mult, off) in self.mimic.items():
+                if leader in self.targets:
+                    self.d.ctrl[self.mimic_act[n]] = off + mult * self._clip(
+                        leader, self.targets[leader])
         steps = max(1, int(round(seconds / TIMESTEP)))
         for _ in range(steps):
             mj.mj_step(self.m, self.d)

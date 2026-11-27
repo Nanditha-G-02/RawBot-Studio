@@ -282,15 +282,25 @@ def options(mode, arms, caps, sim, selection=None, cameras=None, extra=None, rob
         src = (li.get('names') or list((L.get('joints') or {}).keys())) if a == 'leader' \
             else list(sim.get('names') or [])
         tgt = robot['names'] if tg == 'sim' else list((F.get('joints') or {}).keys())
+        # the simulated gripper has no counterpart on the leader: the operator opens and
+        # closes it (key / button), so it is not a joint to be mapped from the leader
+        own = (sim.get('gripper') or {}).get('joint') if (sim.get('gripper') or {}).get(
+            'own') else None
+        if own and tg == 'sim':
+            tgt = [n for n in tgt if n != own]
         if src and tgt:
-            m = robotcaps.mapping(src, tgt, robot['gripper'], pairs)
+            m = robotcaps.mapping(src, tgt, None if own and tg == 'sim' else robot['gripper'],
+                                  pairs)
             checks.append(check('mapping', 'Mapping %d/%d' % (m['matched'], m['total']),
                                 not m['missing'], 'missing on the leader: %s' % ', '.join(
                                     m['missing']) if m['missing'] else 'by joint name'))
-            if robot['gripper']:
+            if robot['gripper'] and not (own and tg == 'sim'):
                 checks.append(check('gripper', 'Gripper', m['gripper'],
                                     robot['gripper'] if m['gripper'] else
                                     'the leader has no %s' % robot['gripper']))
+            elif own and tg == 'sim':
+                checks.append(check('gripper', 'Gripper', True,
+                                    'simulated: open / close with C (the leader has none)'))
             if m['missing'] and not reason:
                 reason = 'The %s has no joint %s of the %s.' % (
                     'leader' if a == 'leader' else 'simulated leader',

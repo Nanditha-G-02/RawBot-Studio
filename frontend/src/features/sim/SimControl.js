@@ -129,6 +129,7 @@ export default function SimControl({ robotType, sim, action, compact }) {
         </button>
       </div>
       <SimEngine robotType={robotType} sim={sim} send={send} />
+      {sim.gripper && <SimGripper gripper={sim.gripper} send={send} />}
       {sim.error && <div className="text-[12px] text-signal-err">{sim.error}</div>}
       {sim.blocked && (
         <div className="text-[12px] text-signal-warn" data-sim-blocked>
@@ -144,6 +145,37 @@ export default function SimControl({ robotType, sim, action, compact }) {
       {action === 'replay' && <Replay robotType={robotType} sim={sim} send={send} />}
       {action === 'leader' && <LeaderSync robotType={robotType} sim={sim} pos={pos} compact={compact} send={send} />}
       {!compact && action !== 'gui' && action !== 'leader' && <JointReadout names={names} pos={pos} />}
+    </div>
+  );
+}
+
+// The simulated robot's gripper. The leader arm has no gripper of its own, so the operator opens
+// and closes it here or with the C key; it follows the leader's pose like any joint and its
+// opening is recorded as the "gripper" joint. C is free in every control mode (the keyboard
+// control uses Q A W S E D R F T G Y H U J I K O L).
+function SimGripper({ gripper, send }) {
+  const toggle = useCallback(() => send({ command: 'gripper', state: 'toggle' }), [send]);
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key !== 'c' && e.key !== 'C') return;
+      if (e.ctrlKey || e.metaKey || e.altKey || e.repeat) return;
+      const t = e.target;
+      if (t && (/^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName) || t.isContentEditable)) return;
+      e.preventDefault();
+      toggle();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [toggle]);
+  return (
+    <div className="flex flex-wrap items-center gap-2 text-[12px]" data-sim-gripper={gripper.closed ? 'closed' : 'open'}>
+      <span className="label">Gripper</span>
+      <span className={gripper.closed ? 'chip-ink' : 'chip'}>{gripper.closed ? 'closing' : 'open'}</span>
+      <span className="chip num" title="how far the fingers have closed">{Math.round((gripper.value || 0) * 100)}%</span>
+      <span className="flex-1" />
+      <button className="btn btn-sm" onClick={toggle} title="Key: C" data-action="sim-gripper-toggle">
+        {gripper.closed ? 'Open' : 'Close'} · C
+      </button>
     </div>
   );
 }

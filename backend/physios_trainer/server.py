@@ -131,6 +131,8 @@ def make_handler(svc):
                 return r.apply_server_config(rid, restart=b.get('restart', True) is not False)
             if m == 'POST' and p[1:] == ['config']:
                 return r.save_config(rid, b.get('config'))
+            if m == 'POST' and p[1:] == ['sim-gripper']:
+                return r.set_sim_gripper(rid, b)
             if m == 'POST' and p[1:] == ['verify', 'ros']:
                 return r.verify_ros(rid, b.get('evidence'))
             if m == 'POST' and p[1:] == ['verify', 'hardware', 'authorize']:

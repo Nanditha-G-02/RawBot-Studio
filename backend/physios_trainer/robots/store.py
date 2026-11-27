@@ -20,7 +20,7 @@ import uuid
 
 import time
 
-from physios_trainer.robots import archive, readiness as rd, urdf, xacro
+from physios_trainer.robots import archive, gripper, readiness as rd, urdf, xacro
 from physios_trainer.util import atomic_write_json, now_iso, read_json, slug
 
 ROBOT_TYPES = ('arm', 'mobile_manipulator', 'gripper', 'humanoid', 'other')
@@ -260,6 +260,12 @@ class RobotStore:
                 p['validation'] = rep
                 self._finish_validation(p, rid)
                 return p
+            if p.get('sim_gripper'):
+                try:
+                    text = gripper.attach(text, p['sim_gripper'])[0]
+                except gripper.GripperError as e:
+                    p.pop('sim_gripper', None)
+                    self._event(p, 'sim_gripper', 'Simulated gripper removed: %s' % e)
             (self._dir(rid) / 'resolved.urdf').write_text(text, encoding='utf-8')
             fdir = self._files_dir(rid)
             rep = urdf.validate(text, files, read_bytes=lambda f: (fdir / f).read_bytes(),
@@ -325,6 +331,43 @@ class RobotStore:
                         (' (was registered)' if was == 'registered' else ''))
             self._save(p)
             return p
+
+    def set_sim_gripper(self, rid, body):
+        """Add a simulated parallel gripper to the model (``body['enabled']`` true, with
+        optional size options) or take it away. The URDF is resolved again and the gripper
+        joint is added to / removed from the robot configuration. Nothing is sent to a robot."""
+        body = body or {}
+        with self.lock:
+            p = self._load(rid)
+            if p.get('state') != 'registered':
+                raise RobotError('Register the robot model first (Stage 1).', 409)
+            if body.get('enabled') is False:
+                if not p.get('sim_gripper'):
+                    return self.get(rid)
+                p.pop('sim_gripper')
+            else:
+                if p.get('sim_gripper'):
+                    raise RobotError('This robot already has a simulated gripper.', 409)
+                text = (self._dir(rid) / 'resolved.urdf').read_text(encoding='utf-8')
+                try:
+                    opts = gripper.attach(text, {k: v for k, v in body.items()
+                                                 if k != 'enabled'})[1]
+                except gripper.GripperError as e:
+                    raise RobotError(str(e), 400)
+                p['sim_gripper'] = opts
+            self._event(p, 'sim_gripper', 'Simulated gripper %s.' % (
+                'added' if p.get('sim_gripper') else 'removed'))
+            self._save(p)
+            p = self.validate(rid)
+            cfg = p.get('config')
+            if cfg:
+                rows = [r for r in cfg.get('joints') or []
+                        if r.get('urdf_joint') != gripper.JOINT]
+                if p.get('sim_gripper'):
+                    rows.append(gripper.config_row(
+                        p['sim_gripper'], max([r.get('motor_id') or 0 for r in rows] + [0]) + 1))
+                self.save_config(rid, dict(cfg, joints=rows))
+            return self.get(rid)
 
     def set_connected(self, rid, on):
         with self.lock:

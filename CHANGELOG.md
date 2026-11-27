@@ -14,6 +14,16 @@
   are the physics result. Installed with `./scripts/install.sh --with-mujoco`; offered only where
   it can run.
 * **Read-only robots reach Stage 4** (data and training check) without the motion test.
+* **Simulated gripper** for a model that has none (Robots → Robot setup → Model file → Simulated
+  gripper). A two-finger parallel gripper is added to the model on its last arm link (size and
+  position are options), so the 3D view, the physics and the joint table see one robot. The leader
+  arm has no gripper, so the operator opens and closes it with the **C** key or the Open / Close
+  button (Planning and Record); it follows the leader's pose as before. Its opening is the
+  `gripper` joint (metres, 0 = open): recorded in the follower state and in the action
+  (`/rawbot/leader/joint_states`), so a dataset teaches the grasp. In MuJoCo both fingers squeeze
+  with the same force and hold a cube by friction. The wrist camera rides the gripper, looking
+  along the fingers. Nothing is sent to a real robot. Mimic joints no longer need a motor mapping.
+  Existing demonstrations have no gripper channel: re-record them, or pad them.
 
 * **Apply to robot server.** A custom robot's configuration is written into the robot server's
   `data/robot-config/` and the robot runtime restarted in one action (Robot readiness, and Verify

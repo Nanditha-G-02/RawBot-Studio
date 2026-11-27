@@ -412,6 +412,27 @@ On a computer without a working GPU (software WebGL) heavy meshes make the view 
 drops shadows by itself, and it draws only when something changes. Check that the browser uses the
 GPU (`chrome://gpu`).
 
+#### Simulated gripper (a model without one)
+
+Robots → Robot setup → Model file → **Simulated gripper** → *Add simulated gripper* (opening and
+finger length in mm; the robot must be registered). A two-finger parallel gripper is added to the
+model on its last arm link, along that link's +z axis (the flange direction of most arms; the
+`xyz` / `rpy` / `attach_link` options of `POST /robots/<id>/sim-gripper` change it). The model's
+URDF is resolved again and a joint row `gripper` (URDF joint `sim_gripper`, metres: 0 = open,
+half the opening = closed) is added to the robot configuration; the second finger follows the
+first (`<mimic>`, which needs no motor mapping). A model that already has a gripper joint is
+left alone.
+
+The leader arm has no gripper, so the operator drives it: the **C** key (not while typing in a
+field) or the Open / Close button next to Engine in Planning and Record. The arm keeps following
+the leader. The opening is recorded as the follower's `gripper` state and as the `gripper`
+action (`/rawbot/leader/joint_states`), so a demonstration contains the grasp and the release. In
+MuJoCo both fingers have their own servo, so the cube is centred and held by friction. The wrist
+camera rides the gripper body and looks along the fingers. Nothing is sent to a real robot.
+
+A dataset recorded with the gripper has one more joint than one recorded without it: demonstrations
+recorded before cannot be mixed with new ones unless the gripper channel is added to them.
+
 #### Simulation engine: Kinematic or MuJoCo
 
 Planning → Robot & control → **Engine** (shown when more than one can run):

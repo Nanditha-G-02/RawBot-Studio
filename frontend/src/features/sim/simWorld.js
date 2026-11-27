@@ -385,6 +385,18 @@ export function makeUrdfRobot({ urdf, meshMap, id, mapping }) {
     toolLink,
     joints: built.jointObj,
     mountWrist(cam) {
+      // the simulated gripper (robots/gripper.py): the camera rides its body, beside the finger
+      // plane and looking along the fingers, so both fingers show at the sides of the image
+      const gb = built.linkObj.sim_gripper_base;
+      if (gb) {
+        gb.add(cam);
+        const off = new THREE.Vector3(0.04, 0, 0.045);
+        const up = new THREE.Vector3(1, 0, 0);
+        cam.position.copy(off);
+        cam.up.copy(up);
+        cam.quaternion.setFromRotationMatrix(new THREE.Matrix4().lookAt(off, new THREE.Vector3(0, 0, 0.17), up));
+        return;
+      }
       const d = outward();
       // beside the flange, looking along the tool
       const side = Math.abs(d.z) < 0.9 ? new THREE.Vector3(0, 0, 1) : new THREE.Vector3(1, 0, 0);

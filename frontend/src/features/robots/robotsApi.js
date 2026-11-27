@@ -36,6 +36,8 @@ export const updateRobot = (id, meta) => act(id, 'update', meta);
 export const validateRobot = (id, entry) => act(id, 'validate', entry ? { entry } : {});
 export const registerRobot = (id) => act(id, 'register');
 export const replaceRobotFiles = (id) => act(id, 'replace');
+// a simulated parallel gripper for a model that has none (simulation only; nothing is sent to a robot)
+export const setSimGripper = (id, body) => act(id, 'sim-gripper', body);
 export const connectRobot = (id, connected) => act(id, 'connect', { connected });
 export const deleteRobot = (id, confirmName) => act(id, 'delete', { confirm_name: confirmName });
 
