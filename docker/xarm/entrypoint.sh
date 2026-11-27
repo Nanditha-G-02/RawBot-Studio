@@ -25,7 +25,24 @@ if [[ "${PHYSIOS_XARM_MODE:-follower}" == leader ]]; then
   # LEADER: the arm is moved by hand (UFACTORY manual mode) and only its joints are published,
   # at 100 Hz (report_type dev) on /ufactory/joint_states. No ros2_control, nothing commands it.
   NS=/ufactory
-  call() { ros2 service call "$NS/$1" "$2" "$3" >/dev/null; }
+  # a service call; the arm's answer is shown when it refuses (ret != 0)
+  call() {
+    local out
+    out=$(ros2 service call "$NS/$1" "$2" "$3" 2>&1) || { echo "[physios-xarm] $1: call failed: ${out: -200}"; return 0; }
+    if ! grep -q 'ret=0' <<<"$out"; then echo "[physios-xarm] $1 refused: $(grep -o 'ret=[^)]*' <<<"$out" | head -1)"; fi
+  }
+  # the arm's own report (xarm_msgs/RobotMsg): mode 2 = manual, state 4 = stopped, err = C code
+  report() {
+    timeout 8 ros2 topic echo --once "$NS/robot_states" 2>/dev/null |
+      awk '/^(state|mode|err|warn|mt_able|mt_brake):/ {printf "%s=%s ", $1, $2}' | tr -d ':'
+  }
+  manual() {   # into manual mode: clear errors, servos on, mode 2, state 0
+    call clean_error xarm_msgs/srv/Call '{}'
+    call motion_enable xarm_msgs/srv/SetInt16ById '{id: 8, data: 1}'
+    call set_mode xarm_msgs/srv/SetInt16 '{data: 2}'
+    call set_state xarm_msgs/srv/SetInt16 '{data: 0}'
+    sleep 1
+  }
   restore() {   # leaving: back to position mode, the arm holds its pose
     echo "[physios-xarm] leaving manual mode"
     call set_mode xarm_msgs/srv/SetInt16 '{data: 0}' || true
@@ -37,11 +54,26 @@ if [[ "${PHYSIOS_XARM_MODE:-follower}" == leader ]]; then
   DRV=$!
   trap 'restore; exit 0' TERM INT
   for _ in $(seq 1 60); do ros2 service list 2>/dev/null | grep -q "^$NS/set_mode$" && break; sleep 1; done
-  call clean_error xarm_msgs/srv/Call '{}'
-  call motion_enable xarm_msgs/srv/SetInt16ById '{id: 8, data: 1}'
-  call set_mode xarm_msgs/srv/SetInt16 '{data: 2}'
-  call set_state xarm_msgs/srv/SetInt16 '{data: 0}'
-  echo "[physios-xarm] $TYPE at $PHYSIOS_XARM_IP: LEADER, manual mode (move it by hand); joints on $NS/joint_states"
+  manual
+  R=$(report)
+  if ! grep -q 'mode=2 ' <<<"$R" || ! grep -q 'err=0 ' <<<"$R"; then
+    echo "[physios-xarm] not in manual mode yet ($R), trying again"
+    manual
+    R=$(report)
+  fi
+  if grep -q 'mode=2 ' <<<"$R" && grep -q 'err=0 ' <<<"$R"; then
+    echo "[physios-xarm] $TYPE at $PHYSIOS_XARM_IP: LEADER, manual mode (move it by hand); joints on $NS/joint_states ($R)"
+  else
+    echo "[physios-xarm] $TYPE at $PHYSIOS_XARM_IP: NOT in manual mode - the arm stays stiff ($R)."
+    echo "[physios-xarm]   err is the controller's C code (UFACTORY manual). Fix its cause (e.g. C22: move the arm out of the folded pose), then: ./docker/physios-docker.sh xarm-down && ./docker/physios-docker.sh xarm-up"
+  fi
+  # report every change of mode / state / error while running (an error stiffens the arm)
+  ( last="$R"; while kill -0 "$DRV" 2>/dev/null; do sleep 5; now=$(report)
+      if [[ -n "$now" && "$now" != "$last" ]]; then
+        cur=$(sed 's/mt_able=[^ ]* //; s/mt_brake=[^ ]* //' <<<"$now"); old=$(sed 's/mt_able=[^ ]* //; s/mt_brake=[^ ]* //' <<<"$last")
+        [[ "$cur" != "$old" ]] && echo "[physios-xarm] arm now: $now"
+        last="$now"
+      fi; done ) &
   wait "$DRV"
   exit $?
 fi
