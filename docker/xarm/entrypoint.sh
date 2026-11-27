@@ -28,8 +28,12 @@ if [[ "${PHYSIOS_XARM_MODE:-follower}" == leader ]]; then
   # a service call; the arm's answer is shown when it refuses (ret != 0)
   call() {
     local out
-    out=$(ros2 service call "$NS/$1" "$2" "$3" 2>&1) || { echo "[physios-xarm] $1: call failed: ${out: -200}"; return 0; }
-    if ! grep -q 'ret=0' <<<"$out"; then echo "[physios-xarm] $1 refused: $(grep -o 'ret=[^)]*' <<<"$out" | head -1)"; fi
+    # judged by the arm's answer, not the exit code: with rmw_zenoh the ros2 CLI can exit with
+    # "close operation timed out" after the answer arrived
+    out=$(timeout 20 ros2 service call "$NS/$1" "$2" "$3" 2>&1) || true
+    if grep -q 'ret=0' <<<"$out"; then return 0; fi
+    if grep -q 'ret=' <<<"$out"; then echo "[physios-xarm] $1 refused: $(grep -o 'ret=[^)]*' <<<"$out" | head -1)"
+    else echo "[physios-xarm] $1: no answer (${out: -160})"; fi
   }
   # the arm's own report (xarm_msgs/RobotMsg): mode 2 = manual, state 4 = stopped, err = C code
   report() {
