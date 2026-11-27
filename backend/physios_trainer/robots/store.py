@@ -532,9 +532,20 @@ class RobotStore:
             raise RobotError('The robot server\'s config folder is not known here.', 409)
         d = Path(self.robot_config_dir)
         d.mkdir(parents=True, exist_ok=True)
+        target = d / out['filename']
+        try:
+            same = target.exists() and target.read_text() == out['yaml']
+        except OSError:
+            same = False
+        if same:
+            # the robot server already has exactly this file: restarting it would only drop
+            # rosbridge and any running task for nothing
+            return {'robot_type': out['robot_type'], 'file': str(target), 'restarted': False,
+                    'unchanged': True,
+                    'message': 'The robot server already has this configuration; not restarted.'}
         tmp = d / ('.%s.tmp' % out['filename'])
         tmp.write_text(out['yaml'])
-        os.replace(tmp, d / out['filename'])
+        os.replace(tmp, target)
         ok, msg = (self.restart_robot_runtime() if restart and self.restart_robot_runtime
                    else (False, 'Restart the robot runtime to load it.'))
         return {'robot_type': out['robot_type'], 'file': str(d / out['filename']),

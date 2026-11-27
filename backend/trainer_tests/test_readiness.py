@@ -265,6 +265,9 @@ def test_apply_server_config_writes_and_restarts(reg, tmp_path):
     f = Path(r['file'])
     assert f.parent == st.robot_config_dir and 'leader:/ufactory/joint_states' in f.read_text()
     assert st.get(rid)['server_copy'] == 'current'
+    # applying the same configuration again must not restart the robot runtime
+    again = st.apply_server_config(rid)
+    assert again['unchanged'] and not again['restarted'] and calls == [1]
     # a changed configuration: the server's copy is older until applied again
     st.save_config(rid, good_cfg(st, rid, command_interface='none', command_topic='',
                                   leader_topic='/arm/joint_states'))
