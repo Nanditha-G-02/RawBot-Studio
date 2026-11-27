@@ -238,3 +238,32 @@ def test_read_only_robot_needs_no_motion_test(reg):
     assert 'leader:/ufactory/joint_states' in y['yaml']
     # a configuration error makes it not read-only (nothing is exported from a broken config)
     assert p['config']['command_interface'] == 'none'
+
+
+def test_apply_server_config_writes_and_restarts(reg, tmp_path):
+    """Apply writes the robot server's config file into data/robot-config and restarts the
+    robot runtime; the robot shows whether the server's copy is current."""
+    st, rid = reg
+    st.robot_config_dir = tmp_path / 'robot-config'
+    calls = []
+    st.restart_robot_runtime = lambda: (calls.append(1) or (True, 'restarted'))
+    st.save_config(rid, good_cfg(st, rid, command_interface='none', command_topic='',
+                                  leader_topic='/ufactory/joint_states'))
+    assert st.get(rid)['server_copy'] == 'missing'
+    r = st.apply_server_config(rid)
+    assert r['restarted'] and calls == [1]
+    f = Path(r['file'])
+    assert f.parent == st.robot_config_dir and 'leader:/ufactory/joint_states' in f.read_text()
+    assert st.get(rid)['server_copy'] == 'current'
+    # a changed configuration: the server's copy is older until applied again
+    st.save_config(rid, good_cfg(st, rid, command_interface='none', command_topic='',
+                                  leader_topic='/arm/joint_states'))
+    assert st.get(rid)['server_copy'] == 'outdated'
+    assert [x for x in st.list() if x['id'] == rid][0]['server_copy'] == 'outdated'
+    st.apply_server_config(rid, restart=False)
+    assert st.get(rid)['server_copy'] == 'current' and calls == [1]
+    # a commanded robot still needs Stage 3 before anything is written
+    st.save_config(rid, good_cfg(st, rid, command_interface='joint_trajectory',
+                                  command_topic='/arm_controller/joint_trajectory'))
+    with pytest.raises(RobotError, match='Stage 3'):
+        st.apply_server_config(rid)

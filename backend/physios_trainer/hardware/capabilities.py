@@ -43,7 +43,8 @@ def arm_reason(mode, card, role):
                 % name,
         'in_use': card.get('detail') or '%s port is in use by another program.' % name,
         'not_found': '%s arm is not plugged in.' % name,
-        'not_configured': 'No %s arm is set up. Use Detect Hardware.' % role,
+        'not_configured': card.get('detail') if card.get('ros_only') else
+            'No %s arm is set up. Use Detect Hardware.' % role,
         'error': card.get('detail') or '%s arm did not pass the motor check.' % name,
         'detected': '%s arm is detected but not connected. Press Connect.' % name,
     }.get(st, '%s arm is not connected.' % name)

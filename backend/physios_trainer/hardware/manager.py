@@ -1083,6 +1083,14 @@ class Hardware:
         elif dev:
             state, detail = 'not_found', 'Not plugged in (last seen on %s).' % (
                 dev.get('last_port') or '?')
+        elif not spec:
+            # no motor table: this robot's arms are only reached through ROS, so the fix is a
+            # topic in its robot configuration or the arm's driver, not a USB scan
+            state = 'not_configured'
+            card['ros_only'] = True
+            detail = ('No %s topic in the robot configuration (Robots -> Robot setup -> '
+                      'Verify -> Robot configuration).' % role if not card['topic'] else
+                      'No joint messages on %s. Start the arm\'s driver.' % card['topic'])
         else:
             state, detail = 'not_configured', 'No %s arm set up.' % role
         if state == 'connected':

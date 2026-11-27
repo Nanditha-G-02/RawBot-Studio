@@ -79,7 +79,8 @@ class RobotStore:
                                       'state', 'created_at', 'updated_at', 'connected')} | {
             'validation_status': v.get('status'), 'links': s.get('links'),
             'joints': s.get('joints'), 'dof': s.get('dof'), 'stage': p.get('stage', 0),
-            'readiness': '%d/4' % (p.get('stage') or 0), 'read_only': rd.read_only(p)}
+            'readiness': '%d/4' % (p.get('stage') or 0), 'read_only': rd.read_only(p),
+            'server_copy': self._server_copy(p)}
 
     def list(self):
         out = []
@@ -96,6 +97,7 @@ class RobotStore:
             p = self._load(rid)
             p['files'] = archive.list_files(self._dir(rid) / 'files')
             p['readiness'] = rd.summarize(p)
+            p['server_copy'] = self._server_copy(p)
             return p
 
     # ---- create / edit ----------------------------------------------------------------------
@@ -498,6 +500,44 @@ class RobotStore:
             self._save(p)
             return {'ok': ok, 'checks': checks, 'compat': compat, 'features': feats,
                     'robot': self.get(rid)}
+
+    # the robot server's copy: data/robot-config/<robot type>_config.yaml in the data folder it
+    # shares with RawBot Studio (set by the service; None in tests that do not use it)
+    robot_config_dir = None
+    restart_robot_runtime = None    # callable() -> (ok, message); set by the service
+
+    def _server_copy(self, p):
+        """'current', 'outdated' (the robot server has an older configuration), 'missing' or
+        None (unknown / nothing to export yet)."""
+        if not self.robot_config_dir or not p.get('config'):
+            return None
+        try:
+            key, text = rd.server_config_yaml(p, self._cfg_ok(p))
+        except Exception:  # noqa: BLE001 - configuration not exportable yet
+            return None
+        f = Path(self.robot_config_dir) / ('%s_config.yaml' % key)
+        if not f.exists():
+            return 'missing'
+        try:
+            return 'current' if f.read_text() == text else 'outdated'
+        except OSError:
+            return None
+
+    def apply_server_config(self, rid, restart=True):
+        """Write the server configuration into the robot server's config folder and restart
+        the robot runtime so it loads it - instead of export, download, copy, restart."""
+        out = self.server_config(rid)
+        if not self.robot_config_dir:
+            raise RobotError('The robot server\'s config folder is not known here.', 409)
+        d = Path(self.robot_config_dir)
+        d.mkdir(parents=True, exist_ok=True)
+        tmp = d / ('.%s.tmp' % out['filename'])
+        tmp.write_text(out['yaml'])
+        os.replace(tmp, d / out['filename'])
+        ok, msg = (self.restart_robot_runtime() if restart and self.restart_robot_runtime
+                   else (False, 'Restart the robot runtime to load it.'))
+        return {'robot_type': out['robot_type'], 'file': str(d / out['filename']),
+                'restarted': ok, 'message': msg}
 
     def server_config(self, rid):
         with self.lock:

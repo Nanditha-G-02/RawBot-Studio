@@ -127,6 +127,8 @@ def make_handler(svc):
                 return {'config': r.default_config(rid)}
             if m == 'GET' and p[1:] == ['server-config']:
                 return r.server_config(rid)
+            if m == 'POST' and p[1:] == ['server-config', 'apply']:
+                return r.apply_server_config(rid, restart=b.get('restart', True) is not False)
             if m == 'POST' and p[1:] == ['config']:
                 return r.save_config(rid, b.get('config'))
             if m == 'POST' and p[1:] == ['verify', 'ros']:

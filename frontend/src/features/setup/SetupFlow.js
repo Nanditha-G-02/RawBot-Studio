@@ -36,6 +36,7 @@ import { selectRobotType, removeAllTags } from '../tasks/taskSlice';
 import { setRobotTypeList, setIsFirstLoadTrue, moveToPage, setRobotsView } from '../ui/uiSlice';
 import {
   ROBOT_TYPE_LABELS,
+  applyServerConfig,
   createRobot,
   fetchResolvedUrdf,
   getRobot,
@@ -80,6 +81,42 @@ function useApplyRobotType() {
       dispatch(removeAllTags());
     },
     [setRobotType, dispatch, phase]
+  );
+}
+
+// Apply a custom robot's configuration to the robot server (file + restart), wait until the
+// server lists the robot again and, if it was the active robot, select it again.
+function useApplyServerConfig() {
+  const dispatch = useDispatch();
+  const applyType = useApplyRobotType();
+  const { getRobotTypeList } = useRosServiceCaller();
+  return useCallback(
+    async (id, key, reselect) => {
+      const r = await applyServerConfig(id);
+      if (!r.restarted) {
+        toast(r.message, { icon: 'ℹ' });
+        return r;
+      }
+      for (let i = 0; i < 30; i += 1) {
+        // eslint-disable-next-line no-await-in-loop
+        await new Promise((ok) => setTimeout(ok, 2000));
+        try {
+          // eslint-disable-next-line no-await-in-loop
+          const t = await getRobotTypeList();
+          if (t && t.robot_types && t.robot_types.includes(key)) {
+            dispatch(setRobotTypeList(t.robot_types));
+            if (reselect) await applyType(key); // eslint-disable-line no-await-in-loop
+            toast.success('Robot server updated');
+            return r;
+          }
+        } catch (e) {
+          // still restarting
+        }
+      }
+      toast.error('The robot server did not come back within a minute.');
+      return r;
+    },
+    [dispatch, applyType, getRobotTypeList]
   );
 }
 
@@ -786,6 +823,7 @@ function CustomVerify({ customId, onConfirmed, footer }) {
   const [busy, setBusy] = useState(false);
   const types = useRobotTypes();
   const applyType = useApplyRobotType();
+  const applyServer = useApplyServerConfig();
   const active = useSelector((s) => s.tasks.taskStatus.robotType);
   const load = useCallback(async () => {
     try {
@@ -809,6 +847,18 @@ function CustomVerify({ customId, onConfirmed, footer }) {
   const onServer = types.list.includes(key);
   const confirmed = active === key;
   const extra = robotExtraTabs.find((t) => t.value === tab);
+  const canApply = Boolean(robot.readiness?.allowed?.export_server_config);
+  const apply = async () => {
+    setBusy(true);
+    try {
+      await applyServer(robot.id, key, confirmed);
+      await load();
+    } catch (e) {
+      toast.error(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
   const useIt = async () => {
     setBusy(true);
     try {
@@ -833,6 +883,13 @@ function CustomVerify({ customId, onConfirmed, footer }) {
     ro && stage < 3
       ? { key: 'hw', title: 'Hardware verified (Stage 3)', detail: 'Not needed: no commands are sent to this robot (command interface: none).', state: 'ok' }
       : { key: 'hw', title: 'Hardware verified (Stage 3)', detail: stage >= 3 ? 'The supervised one-joint test passed.' : 'Run the supervised hardware test under Robot readiness.', state: stage >= 3 ? 'ok' : 'fail' },
+    onServer && robot.server_copy === 'outdated' && {
+      key: 'server_copy',
+      title: 'Robot server has an older configuration',
+      detail: 'Saved changes are not on the robot server yet.',
+      state: 'warn',
+      action: canApply ? { label: busy ? 'Applying…' : 'Apply', run: apply } : null,
+    },
     {
       key: 'server',
       title: onServer ? 'Known to the robot server' : 'Not on the robot server yet',
@@ -840,11 +897,19 @@ function CustomVerify({ customId, onConfirmed, footer }) {
         ? confirmed
           ? 'This robot is the active robot type.'
           : 'Use it as the active robot type to continue.'
-        : 'After Stage 3: Export server config (Robot readiness), save it in data/robot-config/, restart the robot runtime, then press Refresh.',
+        : canApply
+        ? 'Apply it to the robot server.'
+        : 'Available after Stage 3.',
       state: onServer ? (confirmed ? 'ok' : 'warn') : 'fail',
-      action: onServer && !confirmed && (stage >= 3 || ro) ? { label: busy ? 'Setting…' : 'Use this robot', run: useIt } : !onServer ? { label: 'Refresh', run: types.reload } : null,
+      action: onServer && !confirmed && (stage >= 3 || ro)
+        ? { label: busy ? 'Setting…' : 'Use this robot', run: useIt }
+        : !onServer && canApply
+        ? { label: busy ? 'Applying…' : 'Apply', run: apply }
+        : !onServer
+        ? { label: 'Refresh', run: types.reload }
+        : null,
     },
-  ];
+  ].filter(Boolean);
   return (
     <div className="grid gap-4">
       <Sheet title={`4 · Verify ${robot.name}`} code="S4" actions={<StageBadge stage={robot.stage} state={robot.state} />}>
@@ -861,8 +926,10 @@ function CustomVerify({ customId, onConfirmed, footer }) {
   );
 }
 
-function StepVerify({ view, setView }) {
+function StepVerify({ view, setView, customs = [], reloadCustoms }) {
   const robotType = useSelector((s) => s.tasks.taskStatus.robotType);
+  const applyServer = useApplyServerConfig();
+  const [applying, setApplying] = useState(false);
   const heartbeat = useSelector((s) => s.tasks.heartbeatStatus);
   const offline = useSelector((s) => s.hardware.offline);
   const status = useHardwareStatus();
@@ -892,6 +959,31 @@ function StepVerify({ view, setView }) {
 
   const hwStatus = status && status.robot_type === robotType ? status : null;
   const checks = builtinChecks({ robotType, viewType: view.robotType, heartbeat, status: hwStatus, offline, goHardware: () => setView({ step: 3 }) });
+  // the active robot is a custom one whose saved configuration is newer than the robot server's
+  const custom = customs.find((r) => customKey(r.id) === robotType);
+  if (custom && custom.server_copy === 'outdated') {
+    checks.splice(1, 0, {
+      key: 'server_copy',
+      title: 'Robot server has an older configuration',
+      detail: 'Saved changes are not on the robot server yet.',
+      state: 'warn',
+      action: {
+        label: applying ? 'Applying…' : 'Apply',
+        run: async () => {
+          setApplying(true);
+          try {
+            await applyServer(custom.id, robotType, true);
+            if (reloadCustoms) await reloadCustoms();
+            setStamp((n) => n + 1);
+          } catch (e) {
+            toast.error(e.message);
+          } finally {
+            setApplying(false);
+          }
+        },
+      },
+    });
+  }
   const blocking = checks.some((c) => c.blocking);
   const warnings = checks.filter((c) => c.state === 'warn' || c.state === 'fail').length;
   return (

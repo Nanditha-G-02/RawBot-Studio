@@ -77,11 +77,31 @@ class Service:
         self.health_lock = threading.Lock()
         self.rollouts = ro.Rollouts(self.data_dir, self.envs, log=log)
         self.robots = RobotStore(self.data_dir)
+        self.robots.robot_config_dir = self.repo / 'robot-config'
+        self.robots.restart_robot_runtime = self._restart_robot_runtime
         self.opt = Sessions(self, self.data_dir, log=log, autostart=autostart_optimizer)
         # flexible robot setup: arms, connections, calibration, jog (hardware/manager.py)
         self.hardware = Hardware(self.repo / 'workspace' / 'physios' / 'hardware', self.envs,
                                  rollouts=self.rollouts, notifier=self.notifier, log=log,
                                  monitor=autostart_optimizer, robots_dir=self.robots.root)
+
+    @staticmethod
+    def _restart_robot_runtime():
+        """Restart the physios-robot container so it loads data/robot-config again. Nothing
+        in it moves an arm; a task that is running there is stopped."""
+        import shutil
+        import subprocess
+        if not shutil.which('docker'):
+            return False, 'Docker not found: restart the robot runtime (./start_physios.sh --with-robot).'
+        try:
+            r = subprocess.run(['docker', 'restart', '-t', '5', 'physios-robot'],
+                               capture_output=True, text=True, timeout=60)
+        except (OSError, subprocess.SubprocessError) as e:
+            return False, 'Could not restart the robot runtime: %s' % e
+        if r.returncode != 0:
+            return False, 'Could not restart the robot runtime: %s' % (
+                (r.stderr or r.stdout).strip()[:200] or 'docker restart failed')
+        return True, 'Robot runtime restarted; it loads the configuration in about 10 s.'
 
     def _run_finished(self, run):
         prog = run.get('progress') or {}

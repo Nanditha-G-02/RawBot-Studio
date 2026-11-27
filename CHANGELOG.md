@@ -2,6 +2,12 @@
 
 ## 2.0.0, renamed (2026-11-13)
 
+* **Apply to robot server.** A custom robot's configuration is written into the robot server's
+  `data/robot-config/` and the robot runtime restarted in one action (Robot readiness, and Verify
+  when the server's copy is older or missing), instead of export, download, copy and restart.
+  Verify flags "Robot server has an older configuration" after a change. Arms reached through ROS
+  explain a missing topic or driver instead of "Use Detect Hardware".
+
 * **Arms: Real or Sim per role.** Home, Robot setup and the Hardware page choose each arm
   (leader, follower) as real or simulated instead of picking one of five named configurations;
   the configuration follows from the pair (Leader Only, from older setups, reads as a real leader

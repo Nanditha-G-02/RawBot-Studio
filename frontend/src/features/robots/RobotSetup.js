@@ -37,6 +37,7 @@ const api = {
   result: (id, token, result) => trainerFetch(`/robots/${id}/verify/hardware/result`, { method: 'POST', body: { token, result } }),
   data: (id, body) => trainerFetch(`/robots/${id}/verify/data`, { method: 'POST', body }),
   serverConfig: (id) => trainerFetch(`/robots/${id}/server-config`),
+  applyServerConfig: (id) => trainerFetch(`/robots/${id}/server-config/apply`, { method: 'POST', body: {}, timeoutMs: 90000 }),
   datasets: () => trainerFetch('/datasets'),
 };
 
@@ -729,6 +730,20 @@ function DataCheck({ robot, refresh }) {
       setBusy(false);
     }
   };
+  const [applying, setApplying] = useState(false);
+  const applyCfg = async () => {
+    setApplying(true);
+    try {
+      const r = await api.applyServerConfig(robot.id);
+      if (r.restarted) toast.success(r.message);
+      else toast(r.message, { icon: 'ℹ' });
+      refresh();
+    } catch (e) {
+      toast.error(e.message);
+    } finally {
+      setApplying(false);
+    }
+  };
   const exportCfg = async () => {
     try {
       setYaml(await api.serverConfig(robot.id));
@@ -760,15 +775,20 @@ function DataCheck({ robot, refresh }) {
           )}
         </div>
         <div className="space-y-2">
-          <div className="label">Recording with physical_ai_server</div>
-          <p className="text-[12.5px] text-ink-3">
-            Recording goes through physical_ai_server, which reads one config file per robot. Export the generated file, save it in
-            <span className="font-mono">data/robot-config/</span> of RawBot Studio, restart the robot runtime, then select the robot on Home.
-            This app does not install it for you.
-          </p>
-          <button className="btn btn-sm" onClick={exportCfg} disabled={!allowed.export_server_config} data-action="export-server-config">
-            Export server config
-          </button>
+          <div className="label">Robot server</div>
+          <div className="flex flex-wrap items-center gap-2">
+            <button className="btn-primary btn-sm" onClick={applyCfg} disabled={!allowed.export_server_config || applying} data-action="apply-server-config">
+              {applying && <Spinner className="border-paper border-t-transparent" />} Apply to robot server
+            </button>
+            <button className="btn btn-sm" onClick={exportCfg} disabled={!allowed.export_server_config} data-action="export-server-config">
+              View file
+            </button>
+            {robot.server_copy && (
+              <span className={robot.server_copy === 'current' ? 'chip-ok text-[10.5px]' : 'chip-warn text-[10.5px]'} data-server-copy={robot.server_copy}>
+                {robot.server_copy === 'current' ? 'up to date' : robot.server_copy === 'outdated' ? 'older on server' : 'not on server'}
+              </span>
+            )}
+          </div>
           {yaml && (
             <div>
               <div className="flex items-center justify-between">

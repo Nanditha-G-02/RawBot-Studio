@@ -29,6 +29,9 @@ export const listRobots = () => trainerFetch('/robots');
 export const getRobot = (id) => trainerFetch(`/robots/${id}`);
 export const createRobot = (meta) => trainerFetch('/robots', { method: 'POST', body: meta });
 const act = (id, action, body) => trainerFetch(`/robots/${id}/${action}`, { method: 'POST', body: body || {} });
+// write the server configuration into the robot server's config folder and restart it
+export const applyServerConfig = (id) =>
+  trainerFetch(`/robots/${id}/server-config/apply`, { method: 'POST', body: {}, timeoutMs: 90000 });
 export const updateRobot = (id, meta) => act(id, 'update', meta);
 export const validateRobot = (id, entry) => act(id, 'validate', entry ? { entry } : {});
 export const registerRobot = (id) => act(id, 'register');
