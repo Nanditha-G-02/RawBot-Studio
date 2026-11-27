@@ -27,6 +27,8 @@ import clsx from 'clsx';
 import { Callout, Field, KeyValue, Modal, Select, Sheet, Spinner, StatusDot, TextInput } from '../../components/ui';
 import rosConnectionManager from '../../utils/rosConnectionManager';
 import { usePlanningService } from '../../hooks/usePlanningService';
+import { useRosServiceCaller } from '../../hooks/useRosServiceCaller';
+import { applyServerConfig, getRobot, listRobots } from '../robots/robotsApi';
 import { trainerFetch } from '../../hooks/useTrainer';
 import * as api from './hardwareApi';
 import { STATE_LABEL, stateTone } from './hardwareApi';
@@ -59,6 +61,45 @@ function useAction(robotType, onStatus) {
     [onStatus]
   );
   return [busy, run];
+}
+
+// A custom robot whose only real arm is the leader (follower simulated) but whose configuration
+// still names that arm's topic as the follower: one action moves it to the leader, gives the
+// simulated follower its own topic, marks the robot read-only, applies it to the robot server
+// and selects the robot again once the server is back.
+const SIM_FOLLOWER_TOPIC = '/rawbot/follower/joint_states';
+const keyOf = (id) => id.toLowerCase().replace(/[^a-z0-9_]/g, '_');
+
+function useUseAsLeader(robotType, topic) {
+  const { getRobotTypeList, setRobotType } = useRosServiceCaller();
+  return useCallback(async () => {
+    const list = (await listRobots()).robots || [];
+    const robot = list.find((r) => keyOf(r.id) === robotType);
+    if (!robot) throw new Error('Only a custom robot can be changed here.');
+    const full = await getRobot(robot.id);
+    const config = { ...(full.config || {}), leader_topic: topic, joint_state_topic: SIM_FOLLOWER_TOPIC, command_interface: 'none' };
+    await trainerFetch(`/robots/${robot.id}/config`, { method: 'POST', body: { config } });
+    const r = await applyServerConfig(robot.id);
+    if (!r.restarted) {
+      toast(r.message, { icon: 'ℹ' });
+      return null;
+    }
+    for (let i = 0; i < 30; i += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      await new Promise((ok) => setTimeout(ok, 2000));
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        const t = await getRobotTypeList();
+        if (t && t.robot_types && t.robot_types.includes(robotType)) {
+          await setRobotType(robotType); // eslint-disable-line no-await-in-loop
+          return api.hwStatus(robotType);
+        }
+      } catch (e) {
+        // the robot server is still restarting
+      }
+    }
+    throw new Error('The robot server did not come back within a minute.');
+  }, [robotType, topic, getRobotTypeList, setRobotType]);
 }
 
 // ------------------------------------------------------------------ live joints ---
@@ -191,7 +232,7 @@ function JointComm({ card }) {
 
 // serial: RawBot Studio can open this robot's arms over USB (SO-101 motor table); otherwise the
 // arm is reached through ROS only, so the USB, motor and calibration rows and buttons are hidden
-function ArmCard({ robotType, card, busy, run, onConfigure, onCalibrate, rosbridgeUrl, serial = true }) {
+function ArmCard({ robotType, card, busy, run, onConfigure, onCalibrate, rosbridgeUrl, serial = true, fix = null }) {
   const name = ROLE_NAME[card.role];
   const tone = stateTone(card.state);
   const dimmed = card.state === 'unused';
@@ -214,6 +255,11 @@ function ArmCard({ robotType, card, busy, run, onConfigure, onCalibrate, rosbrid
       </header>
       <div className="px-4 pb-4 pt-0.5 space-y-3">
         <p className="text-[12.5px] text-ink-2 min-h-[18px]" data-arm-detail>{card.detail}</p>
+        {fix && (
+          <button className="btn-primary btn-sm" disabled={!!busy} onClick={fix.run} data-action={`fix-${card.role}`}>
+            {busy === `fix-${card.role}` && <Spinner className="border-paper border-t-transparent" />} {fix.label}
+          </button>
+        )}
         <KeyValue
           rows={[
             ['Connection', card.state === 'connected' ? (card.source === 'ros' ? `Verified · live joints on ${card.topic}` : 'Verified · every motor answers (read-only)') : STATE_LABEL[card.state]],
@@ -964,6 +1010,7 @@ export default function HardwareSetup() {
   const rosbridgeUrl = useSelector((s) => s.ros.rosbridgeUrl);
   const onStatus = useCallback((st) => dispatch(setHardwareStatus(st)), [dispatch]);
   const [busy, run] = useAction(robotType, onStatus);
+  const useAsLeader = useUseAsLeader(robotType, status?.topics?.follower);
   const [cfgRole, setCfgRole] = useState(null);
   const [calOpen, setCalOpen] = useState(false);
   const cal = status?.sessions?.calibration;
@@ -994,6 +1041,14 @@ export default function HardwareSetup() {
     );
   }
   const scan = status.scan_supported;
+  // real leader + simulated follower, no leader topic, but an arm is live on the follower topic
+  const leaderFromFollower =
+    !scan &&
+    ['leader_sim', 'leader_only'].includes(status.mode) &&
+    !status.topics?.leader &&
+    status.topics?.follower &&
+    status.topics.follower !== SIM_FOLLOWER_TOPIC &&
+    status.arms?.leader?.state !== 'connected';
   return (
     <div className="grid gap-4" data-hardware-setup data-mode={status.mode}>
       <Sheet
@@ -1042,6 +1097,11 @@ export default function HardwareSetup() {
             run={run}
             rosbridgeUrl={rosbridgeUrl}
             serial={scan}
+            fix={
+              role === 'leader' && leaderFromFollower
+                ? { label: `Use ${status.topics.follower} as leader`, run: () => run('fix-leader', useAsLeader, 'Leader set; the follower is simulated') }
+                : null
+            }
             onConfigure={setCfgRole}
             onCalibrate={(r) =>
               run(`cal-${r}`, async () => {
