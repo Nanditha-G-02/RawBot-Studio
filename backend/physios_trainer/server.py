@@ -176,7 +176,8 @@ def make_handler(svc):
                                 selection=b.get('selection'), joint_map=b.get('joint_map'),
                                 joint_pairs=b.get('joint_pairs'), workspace=b.get('workspace'),
                                 workspace_guard=b.get('workspace_guard'),
-                                sim_cameras=b.get('sim_cameras'))
+                                sim_cameras=b.get('sim_cameras'),
+                                sim_backend=b.get('sim_backend'))
             if m == 'POST' and p == ['sim']:
                 return hw.sim_command(rt, b)
             if m == 'POST' and p == ['hybrid']:

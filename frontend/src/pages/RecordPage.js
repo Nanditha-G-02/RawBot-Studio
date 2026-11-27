@@ -34,6 +34,8 @@ import PlanRecordPanel from '../features/record/PlanRecordPanel';
 import { usePlanRecording } from '../features/record/usePlanRecording';
 import TaskPhase from '../constants/taskPhases';
 import useHardwareGate, { useHardwareStatus } from '../features/hardware/useHardwareGate';
+import { hwSim } from '../features/hardware/hardwareApi';
+import sceneItems from '../features/sim/sceneItems';
 import PlanningSetup, { selectionText } from '../features/planning/PlanningSetup';
 
 export default function RecordPage({ isActive = true }) {
@@ -55,6 +57,20 @@ export default function RecordPage({ isActive = true }) {
   const planMode = recordMode === 'plan';
   const rec = usePlanRecording(isActive && planMode);
   const running = taskStatus.phase > TaskPhase.READY;
+
+  // the simulated world shows the episode about to be recorded: its objects and targets go to
+  // the simulated robot (3D view, simulated cameras, MuJoCo); with physics, every take starts
+  // with the objects back in place
+  const sceneJson = planMode && rec.plan && rec.current ? JSON.stringify(sceneItems(rec.plan, rec.current)) : '';
+  const sceneLabel = rec.current?.id || '';
+  useEffect(() => {
+    if (!isActive || !sceneJson || !taskStatus.robotType) return;
+    hwSim(taskStatus.robotType, { command: 'scene', items: JSON.parse(sceneJson), label: sceneLabel }).catch(() => {});
+  }, [isActive, sceneJson, sceneLabel, taskStatus.robotType]);
+  const physicsOn = useSelector((state) => state.hardware?.status?.sim?.backend === 'mujoco');
+  useEffect(() => {
+    if (running && physicsOn && taskStatus.robotType) hwSim(taskStatus.robotType, { command: 'scene_reset' }).catch(() => {});
+  }, [running, physicsOn, taskStatus.robotType]);
 
   // 2026: optional review of each saved episode (OFF = unchanged workflow)
   const review = useEpisodeReview(isActive);

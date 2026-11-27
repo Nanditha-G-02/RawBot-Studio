@@ -27,6 +27,7 @@ import { moveToPage } from '../features/ui/uiSlice';
 import PageType from '../constants/pageType';
 import WorkspaceCanvas from '../features/planning/WorkspaceCanvas';
 import PlanningSetup from '../features/planning/PlanningSetup';
+import sceneItems from '../features/sim/sceneItems';
 import StrategyConfig, { combinationCount } from '../features/planning/StrategyConfig';
 import {
   ItemsEditor,
@@ -107,6 +108,8 @@ export default function PlanningPage() {
 
   const plan = doc?.plan;
   const locked = plan?.status === 'archived';
+  // the selected episode's objects and targets, for the simulated world (3D view, cameras)
+  const planScene = useMemo(() => sceneItems(plan, (plan?.episodes || []).find((e) => e.id === selected)), [plan, selected]);
 
   // ---------------------------------------------------------------- data --
   const loadList = useCallback(async () => {
@@ -398,7 +401,7 @@ export default function PlanningPage() {
 
       {/* editor */}
       <div className="flex-1 min-w-0 flex flex-col min-h-0">
-        <PlanningSetup />
+        <PlanningSetup scene={planScene} />
         {!plan || !draft ? (
           <div className="flex-1 grid place-items-center p-8">
             <Empty

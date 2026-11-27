@@ -33,11 +33,13 @@ import uuid
 
 from physios_trainer.hardware import capabilities as capmod
 from physios_trainer.hardware import kinematics as kinmod
+from physios_trainer.hardware import physics as physmod
 from physios_trainer.hardware import planning as planmod
 from physios_trainer.hardware import ports as portmod
 from physios_trainer.hardware import robotcaps
 from physios_trainer.hardware.registry import MODES, ROLES, Registry, motor_spec
 from physios_trainer.hardware.relay import StateRelay
+from physios_trainer.hardware import simbot as simbot_mod
 from physios_trainer.hardware.simbot import SIM_TOPIC, SimRobot
 from physios_trainer.util import atomic_write_json, now_iso, read_json
 
@@ -234,6 +236,9 @@ class Hardware:
         self.action_source_supported = {}
         self._jog_lock = threading.Lock()
         self.robots_dir = robots_dir     # custom robots (URDF joints and limits)
+        # simulation backends (physics.py): MuJoCo runs in this Python when it has the package
+        self.sim_python = physmod.default_sim_python(Path(__file__).resolve().parents[3])
+        self._mujoco = None
         # the simulated robot (simbot.py); publishes over its own rosbridge connection
         self.sim = SimRobot(self.ros.url, sampler=lambda t: self.ros.sample(t),
                             bridge_factory=_bridge if monitor else None, log=log,
@@ -406,9 +411,17 @@ class Hardware:
     # ---- setup ------------------------------------------------------------------------
     def setup(self, robot_type, mode=None, topics=None, env=None, source='operator',
               cameras=None, joints=None, sim_twin=None, selection=None, joint_map=None,
-              joint_pairs=None, workspace=None, workspace_guard=None, sim_cameras=None):
+              joint_pairs=None, workspace=None, workspace_guard=None, sim_cameras=None,
+              sim_backend=None):
         cur = self.reg.setup(robot_type)
         kw = {}
+        if sim_backend is not None:
+            got = {b['id']: b for b in physmod.backends(self.sim_python, (
+                robotcaps.custom_profile(self.robots_dir, robot_type) or {}).get('sim'))}
+            if sim_backend not in got or not got[sim_backend]['available']:
+                raise HardwareError((got.get(sim_backend) or {}).get('detail') or
+                                    'Unknown simulation backend "%s".' % sim_backend)
+            kw['sim_backend'] = sim_backend
         if sim_cameras is not None:
             kw['sim_cameras'] = bool(sim_cameras)
         if isinstance(workspace, dict):
@@ -838,13 +851,25 @@ class Hardware:
         sampler = self._leader_sampler(robot_type, setup) if serial_leader else \
             self._ros_leader_sampler(setup) if state_leader else None
         serial_leader = serial_leader or state_leader
+        csim = (custom or {}).get('sim')
+        backends = physmod.backends(self.sim_python, csim)
+        want = setup.get('sim_backend') or 'kinematic'
+        physics = None
+        if want == 'mujoco' and any(b['id'] == 'mujoco' and b['available'] for b in backends):
+            if self._mujoco is None:
+                self._mujoco = physmod.MujocoBackend(self.sim_python, log=self.log)
+            physics = self._mujoco
         self.sim.ensure(robot_type, run and rc['sim']['available'], setup['topics'],
                         names=rc['names'] or names,
                         state_topic=ft if (run and not own_reason) else None,
                         leader_sampler=sampler, leader_pub=serial_leader,
                         limits=rc['limits'], pairs=setup.get('joint_pairs') or {},
-                        kinematics={'model': model, 'workspace': ws})
+                        kinematics={'model': model, 'workspace': ws},
+                        physics=physics, phys_sim=csim,
+                        mapping=simbot_mod.joint_mapping((custom or {}).get('rows')))
         sim = self.sim.view()
+        sim['backends'] = backends
+        sim['backend_choice'] = want
         sim.update(can_own_state=not own_reason, own_reason=own_reason, twin=bool(
             setup.get('sim_twin')), joint_map=setup.get('joint_map') or {})
         compare = None

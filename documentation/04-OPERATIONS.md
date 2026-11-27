@@ -387,12 +387,63 @@ off the table area near the table, close to the base or into a keep-out are held
 The limits come from the planning workspace (Planning → workspace); `workspace_guard: false` in
 `POST /hardware/setup` switches them off. The SO-101 model is approximate: keep a margin.
 
+#### The simulated world (3D view, objects, cameras)
+
+The simulated robot lives in one 3D world, drawn in Planning → Robot & control (whenever the
+target is the simulated robot) and in Record → **Simulation**, and rendered by the simulated
+cameras - so what you see is what is recorded.
+
+* **The robot** is the robot's own URDF (Robots → Robot setup → Model file): its meshes, joint
+  origins, axes, types (revolute, continuous, prismatic, mimic) and limits. Built-in robot types
+  without an uploaded URDF are drawn from their kinematic chain. The pose comes only from the
+  follower's joint state topic, through the joint table of the robot configuration (URDF value =
+  direction × ROS value + offset, units converted), the same mapping the simulated follower uses.
+* **The stage** is sized to the robot: a table about 2.3 × 2.4 times its reach (the joint offsets
+  after the shoulder), the robot base near its back edge, a grid floor, a key light with shadows.
+  Drag to orbit, scroll to zoom.
+* **Objects and targets** are those of the selected plan episode (Planning) or of the episode
+  being recorded (Record): a cube per object, an open tray per target, at the planned positions.
+  With MuJoCo they are physical bodies and are drawn where the physics puts them.
+* **Cameras:** the *scene* camera stands front-right of the workspace, looking at the robot and the
+  table; the *wrist* camera rides the robot's last arm link (the gripper body, not a jaw), beside
+  the flange, looking along the tool. Both show as insets and as outlines in the 3D view.
+
+On a computer without a working GPU (software WebGL) heavy meshes make the view slow; it then
+drops shadows by itself, and it draws only when something changes. Check that the browser uses the
+GPU (`chrome://gpu`).
+
+#### Simulation engine: Kinematic or MuJoCo
+
+Planning → Robot & control → **Engine** (shown when more than one can run):
+
+* **Kinematic** (built in): the simulated joints follow their targets at the joint speed; objects
+  stay where the plan puts them.
+* **MuJoCo**: physics. The robot is built from its URDF (collision meshes; a DAE mesh is replaced
+  by an STL / OBJ of the same name when the package has one), on a table of the same size, with
+  the episode's objects as free bodies, gravity and contacts; every joint has a stiff,
+  gravity-compensated position servo whose target is the leader (or GUI, script, replay). What is
+  published - and recorded - as the follower's joints is what the physics produced, so a joint
+  blocked by the table shows it. The robot touches the table and the objects but not itself (the
+  pose is the leader's). **Reset objects** puts the objects back; every take starts with them in
+  place. The chip shows MuJoCo's version and the number of contacts.
+
+MuJoCo needs the robot's URDF (a custom robot) and runs in its own Python, installed once with
+`./scripts/install.sh --with-mujoco` (`var/sim-venv`; or point `PHYSIOS_SIM_PYTHON` at a Python
+that has `mujoco`). An engine that cannot run here is not offered. Gazebo and Isaac Sim are not
+available yet: an engine is added as a class with the same interface as `MujocoBackend`
+(`backend/physios_trainer/hardware/physics.py`) and appears in the list once it can run.
+
+Measured with the Lite6 and the SO-101 (their URDFs from `xarm_ros2` and `SO-ARM100`): the 3D
+view's link positions equal MuJoCo's for random poses; the simulated follower trails a moving
+leader by about 10 ms (Kinematic) or 50 ms (MuJoCo), 0.004 rad mean difference after that delay.
+
 #### Simulated cameras
 
 In a simulated set-up, a configured camera with no real publisher is rendered from the simulated
-robot (front view, or a wrist view for names with wrist / grip / hand / tool) by any open RawBot
-Studio page and published on the camera's own topic, so the recorder records it unchanged. It shows
-as *name · sim* and is live only while frames arrive; real cameras always take precedence.
+world above (the *scene* view, or the *wrist* view for names with wrist / grip / hand / tool) by any
+open RawBot Studio page and published on the camera's own topic at 10 frames/s, so the recorder
+records it unchanged. It shows as *name · sim* and is live only while frames arrive; real cameras
+always take precedence.
 
 #### Policy and Human + AI recording
 

@@ -2,6 +2,19 @@
 
 ## 2.0.0, renamed (2026-11-13)
 
+* **Simulated follower in 3D, from the robot's URDF.** Planning → Robot & control and Record →
+  Simulation show the simulated robot built from its uploaded URDF (meshes, joint axes, limits;
+  any robot, not only SO-101) on a stage sized to its reach - table, grid floor, shadows, the plan
+  episode's cube and tray, the scene camera on its stand and the wrist camera on the last arm link,
+  with their views as insets. The simulated cameras render the same world, so the recorded images
+  are what the view shows (they were a stick figure with no objects). Its joint limits default to
+  the URDF's instead of ±π.
+* **MuJoCo physics (optional).** Engine: Kinematic | MuJoCo. MuJoCo builds the robot from its URDF
+  with the plan's objects as free bodies; the published (recorded) follower joints and object poses
+  are the physics result. Installed with `./scripts/install.sh --with-mujoco`; offered only where
+  it can run.
+* **Read-only robots reach Stage 4** (data and training check) without the motion test.
+
 * **Apply to robot server.** A custom robot's configuration is written into the robot server's
   `data/robot-config/` and the robot runtime restarted in one action (Robot readiness, and Verify
   when the server's copy is older or missing), instead of export, download, copy and restart.

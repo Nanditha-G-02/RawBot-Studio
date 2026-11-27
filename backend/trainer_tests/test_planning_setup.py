@@ -564,6 +564,12 @@ def test_custom_robot_urdf_limits_shape_the_simulated_follower(world, tmp_path):
         assert st['sim']['limits'][2] == [0.0, 0.04]
         st = h.sim_command('my_arm_2', {'command': 'targets', 'targets': {'lift_joint': 9}})
         assert st['sim']['target'][1] == pytest.approx(1.5)
+        # 'Robot model (URDF)' in the joint limits menu: back to the model after a change
+        assert st['sim']['model_limits']
+        st = h.sim_command('my_arm_2', {'command': 'limits', 'limits': {'lift_joint': [-3, 3]}})
+        assert st['sim']['limits'][1] == [-3.0, 3.0]
+        st = h.sim_command('my_arm_2', {'command': 'limits', 'reset': True})
+        assert st['sim']['limits'][1] == [-0.4, 1.5] and st['sim']['limits'][2] == [0.0, 0.04]
         assert {c['id'] for c in st['planning']['checks']} >= {'robot'}
         assert opts(st, 'action_sources')['gamepad']['available']
     finally:

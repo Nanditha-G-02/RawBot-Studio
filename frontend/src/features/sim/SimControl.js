@@ -21,11 +21,13 @@ import { useDispatch, useSelector } from 'react-redux';
 import ROSLIB from 'roslib';
 import toast from 'react-hot-toast';
 import clsx from 'clsx';
-import { NumberInput, Select, Spinner, StatusDot, Toggle } from '../../components/ui';
+import { NumberInput, Segmented, Select, Spinner, StatusDot, Toggle } from '../../components/ui';
 import rosConnectionManager from '../../utils/rosConnectionManager';
 import { usePlanningService } from '../../hooks/usePlanningService';
 import { trainerFetch } from '../../hooks/useTrainer';
-import { captures as listCaptures, hwPlanning, hwSim, jogLimits } from '../hardware/hardwareApi';
+import { captures as listCaptures, hwPlanning, hwSetup, hwSim, jogLimits } from '../hardware/hardwareApi';
+import { moveToPage } from '../ui/uiSlice';
+import PageType from '../../constants/pageType';
 import { setHardwareStatus } from '../hardware/hardwareSlice';
 import useHeldInput, { KEY_PAIRS, PAD_MAP } from './useHeldInput';
 
@@ -126,6 +128,7 @@ export default function SimControl({ robotType, sim, action, compact }) {
           ■ Stop
         </button>
       </div>
+      <SimEngine robotType={robotType} sim={sim} send={send} />
       {sim.error && <div className="text-[12px] text-signal-err">{sim.error}</div>}
       {sim.blocked && (
         <div className="text-[12px] text-signal-warn" data-sim-blocked>
@@ -141,6 +144,54 @@ export default function SimControl({ robotType, sim, action, compact }) {
       {action === 'replay' && <Replay robotType={robotType} sim={sim} send={send} />}
       {action === 'leader' && <LeaderSync robotType={robotType} sim={sim} pos={pos} compact={compact} send={send} />}
       {!compact && action !== 'gui' && action !== 'leader' && <JointReadout names={names} pos={pos} />}
+    </div>
+  );
+}
+
+// the simulation backend (hardware/physics.py): only backends that can run here are offered;
+// MuJoCo needs the robot's URDF (Robots -> Robot setup)
+function SimEngine({ robotType, sim, send }) {
+  const dispatch = useDispatch();
+  const [busy, setBusy] = useState(false);
+  const all = sim.backends || [];
+  const usable = all.filter((b) => b.available);
+  const mj = all.find((b) => b.id === 'mujoco');
+  const ph = sim.physics;
+  const choose = async (id) => {
+    setBusy(true);
+    try {
+      dispatch(setHardwareStatus(await hwSetup(robotType, { sim_backend: id })));
+    } catch (e) {
+      toast.error(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const needsUrdf = mj && mj.installed && !mj.available;
+  if (usable.length < 2 && !needsUrdf) return null;
+  return (
+    <div className="flex flex-wrap items-center gap-2 text-[12px]" data-sim-engine={sim.backend}>
+      <span className="label">Engine</span>
+      {usable.length > 1 && (
+        <Segmented size="sm" value={sim.backend_choice || sim.backend} onChange={choose} options={usable.map((b) => ({ value: b.id, label: b.name }))} />
+      )}
+      {busy && <Spinner />}
+      {ph && (
+        <span className={clsx(ph.error ? 'chip-err' : ph.live ? 'chip-ok' : 'chip-warn')} title={(ph.notes || []).join('\n') || undefined} data-physics={ph.error ? 'error' : ph.live ? 'live' : 'starting'}>
+          {ph.error ? 'MuJoCo stopped' : ph.live ? `MuJoCo ${ph.version || ''} · ${ph.contacts ?? 0} contacts` : 'Starting MuJoCo…'}
+        </span>
+      )}
+      {ph && ph.live && (
+        <button className="btn btn-sm" onClick={() => send({ command: 'scene_reset' })} title="Put the objects back where the episode places them" data-action="sim-reset-objects">
+          Reset objects
+        </button>
+      )}
+      {needsUrdf && (
+        <button className="btn-ghost btn-sm" onClick={() => dispatch(moveToPage(PageType.ROBOTS))} title={mj.detail} data-action="sim-add-urdf">
+          Physics needs the robot's URDF · Add URDF
+        </button>
+      )}
+      {ph && ph.error && <span className="w-full text-signal-err">{ph.error}</span>}
     </div>
   );
 }
@@ -218,7 +269,7 @@ function LeaderSync({ robotType, sim, pos, compact, send }) {
     setDs(id);
     try {
       if (!id) {
-        await send({ command: 'limits', limits: Object.fromEntries(names.map((n) => [n, [-Math.PI, Math.PI]])) });
+        await send({ command: 'limits', reset: true });
         return;
       }
       const r = await jogLimits(id);
@@ -253,7 +304,7 @@ function LeaderSync({ robotType, sim, pos, compact, send }) {
               ? 'No fresh leader readings - the simulated follower holds'
               : serial
               ? `Leader · serial session${li.rate_hz ? ` ${li.rate_hz} Hz` : ''}`
-              : `Leader · bridge.py (${li.topic || 'leader topic'})`
+              : `Leader · ${li.topic || 'leader topic'}`
           }
         />
         {li.published && <span className="chip num" title="Recorded as the action (action_source leader_state)">{li.published}</span>}
@@ -295,7 +346,7 @@ function LeaderSync({ robotType, sim, pos, compact, send }) {
           <Select
             value={ds}
             onChange={limitsFrom}
-            options={[{ value: '', label: '±π (no dataset)' }, ...datasets.map((d) => ({ value: d.id, label: `From ${d.id}` }))]}
+            options={[{ value: '', label: sim.model_limits ? 'Robot model (URDF)' : '±π (no model limits)' }, ...datasets.map((d) => ({ value: d.id, label: `From ${d.id}` }))]}
           />
         </div>
       )}

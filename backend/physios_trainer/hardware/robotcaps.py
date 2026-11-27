@@ -15,6 +15,7 @@ Nothing here names a robot model.
 """
 
 import json
+import math
 from pathlib import Path
 import re
 import time
@@ -25,6 +26,39 @@ KEYBOARD_MAX = 9       # useHeldInput: Q/A ... O/L
 GAMEPAD_MAX = 6        # two sticks + bumpers + triggers
 _CACHE = {}
 _TTL = 5.0
+
+
+def chain_reach(urdf_path):
+    """The longest base-to-tip sum of joint offsets (metres): the robot's reach, whatever its
+    zero pose (a folded zero pose makes the model's extent too small)."""
+    import xml.etree.ElementTree as ET
+    try:
+        root = ET.parse(str(urdf_path)).getroot()
+    except (OSError, ET.ParseError):
+        return 0.0
+    kids = {}
+    for j in root.findall('joint'):
+        par, ch, o = j.find('parent'), j.find('child'), j.find('origin')
+        if par is None or ch is None:
+            continue
+        try:
+            xyz = [float(v) for v in ((o.get('xyz') if o is not None else None) or '0 0 0'
+                                      ).split()][:3]
+        except ValueError:
+            xyz = [0.0, 0.0, 0.0]
+        kids.setdefault(par.get('link'), []).append((ch.get('link'), math.sqrt(sum(
+            v * v for v in xyz))))
+
+    def walk(link, depth=0):
+        # the first offset (base height) is not reach
+        if depth > 64:
+            return 0.0
+        return max([(d if depth else 0.0) + walk(c, depth + 1) for c, d in kids.get(link, [])
+                    if d > 1e-6 or depth] + [walk(c, depth) for c, d in kids.get(link, [])
+                                             if d <= 1e-6 and not depth] or [0.0])
+
+    children = {c for v in kids.values() for c, _ in v}
+    return max([walk(r) for r in kids if r not in children] or [0.0])
 
 
 def custom_profile(robots_dir, robot_type):
@@ -60,7 +94,20 @@ def custom_profile(robots_dir, robot_type):
             joints.append({'name': r.get('ros_joint') or r.get('urdf_joint'),
                            'urdf': r.get('urdf_joint'), 'type': u.get('type') or 'revolute',
                            'lower': lo, 'upper': hi})
+        # what a physics backend needs to build the robot: its URDF, mesh files, the joints
+        # to actuate and its reach, which sizes the table - the same measure as the 3D view
+        # (frontend sim/simWorld.js chainReach), so both draw the same table
+        files = d / 'files'
+        mesh_map = {k: str(files / v) for k, v in (summary.get('mesh_map') or {}).items()}
+        sim = None
+        if (d / 'resolved.urdf').is_file():
+            ext = [float(x) for x in summary.get('extent_m') or [] if isinstance(x, (int, float))]
+            reach = chain_reach(d / 'resolved.urdf')
+            sim = {'urdf': str(d / 'resolved.urdf'), 'mesh_map': mesh_map,
+                   'joints': [r.get('urdf_joint') for r in rows if r.get('urdf_joint') in urdf],
+                   'reach': reach if reach > 0.05 else (max(ext) if ext else 0.4)}
         out = {'source': 'custom robot %s' % p.get('name', p.get('id')), 'joints': joints,
+               'rows': rows, 'sim': sim,
                'urdf_joints': summary.get('joint_list') or [],
                'urdf_to_ros': {r.get('urdf_joint'): r.get('ros_joint') or r.get('urdf_joint')
                                for r in rows}}

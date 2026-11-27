@@ -483,7 +483,8 @@ class RobotStore:
     def verify_data(self, rid, policy=None, dataset_info=None, dataset_id=None):
         with self.lock:
             p = self._load(rid)
-            self._need_stage(p, 3, 'The data/training check')
+            ro = rd.read_only(p)
+            self._need_stage(p, 1 if ro else 3, 'The data/training check')
             cfg = self._cfg_ok(p)
             checks, compat, feats = rd.check_data(cfg, policy, dataset_info)
             ok = not any(c['level'] == 'error' for c in checks)
@@ -494,7 +495,7 @@ class RobotStore:
                 ver['data'] = {'at': now_iso(), 'checks': checks, 'compat': compat,
                                'policy': policy, 'dataset': dataset_id,
                                'fp': rd.fingerprints(cfg)['data']}
-                if (p.get('stage') or 0) < 4:
+                if (p.get('stage') or 0) < 4 and not ro:
                     p['stage'] = 4
                 self._event(p, 'stage', 'Stage 4 complete: data and training layout compatible.')
             self._save(p)

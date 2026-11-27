@@ -549,8 +549,9 @@ def summarize(profile):
     stage = int(profile.get('stage') or 0)
     stages = []
 
-    def st(n, name, done, blockers, at=None, detail=None):
-        status = 'done' if done else ('locked' if stage < n - 1 else 'ready' if not blockers
+    def st(n, name, done, blockers, at=None, detail=None, reached=None):
+        reached = stage if reached is None else reached
+        status = 'done' if done else ('locked' if reached < n - 1 else 'ready' if not blockers
                                       else 'blocked')
         stages.append({'n': n, 'name': name, 'status': status, 'blockers': blockers,
                        'verified_at': at, 'detail': detail, 'unlocks': UNLOCKS[n]})
@@ -580,11 +581,16 @@ def summarize(profile):
     st(3, 'Hardware verified', stage >= 3, b3, h.get('at'),
        h.get('result'))
     d = ver.get('data') or {}
-    st(4, 'Data & training ready', stage >= 4, [], d.get('at'), d.get('checks'))
+    # a read-only robot skips Stage 3: its data check needs Stage 1 only, and stays valid
+    # while the configuration it checked is unchanged
+    ro_data = ro and stage >= 1 and bool(d) and d.get('fp') == fps.get('data')
+    st(4, 'Data & training ready', stage >= 4 or ro_data, [], d.get('at'), d.get('checks'),
+       reached=3 if ro and stage >= 1 else None)
     allowed = {'configure': stage >= 1, 'connect': stage >= 2,
                'hardware_test': stage >= 2 and not ro,
                'record': stage >= 3 or (ro and stage >= 1),
-               'export_server_config': stage >= 3 or (ro and stage >= 1), 'train': stage >= 4}
+               'export_server_config': stage >= 3 or (ro and stage >= 1),
+               'check_data': stage >= 3 or (ro and stage >= 1), 'train': stage >= 4 or ro_data}
     summary = '%d/4' % stage
     return {'stage': stage, 'stages': stages, 'allowed': allowed, 'fingerprints': fps,
             'stages_summary': summary, 'read_only': ro}

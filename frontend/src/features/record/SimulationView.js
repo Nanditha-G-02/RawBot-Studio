@@ -31,6 +31,9 @@ import clsx from 'clsx';
 import rosConnectionManager from '../../utils/rosConnectionManager';
 import { usePlanningService } from '../../hooks/usePlanningService';
 import { Segmented } from '../../components/ui';
+import SimViewport from '../sim/SimViewport';
+import sceneItems from '../sim/sceneItems';
+import { useHardwareStatus } from '../hardware/useHardwareGate';
 
 // line-drawing palette: light theme as before; dark theme (light lines on charcoal), chosen
 // when the scene is built
@@ -171,10 +174,17 @@ export default function SimulationView({ episode, plan, active = true, compact }
 
   const isSo101 = profileKey === 'so101';
   const dark = useTheme() === 'dark';
+  const hw = useHardwareStatus();
+  // planned items for the 3D world (metres, robot base frame)
+  const planItems = useMemo(() => sceneItems(plan, episode), [plan, episode]);
+  // the 3D world (URDF / kinematic chain, objects, cameras) for every robot; the older SO-101
+  // line drawing stays only for a physical SO-101 without the simulated robot
+  const use3d = !isSo101 || Boolean(hw?.sim?.running);
+  const physics = hw?.sim?.backend === 'mujoco';
 
   // three.js scene (SO-101 only)
   useEffect(() => {
-    if (!active || !isSo101 || !mountRef.current) return undefined;
+    if (!active || !isSo101 || use3d || !mountRef.current) return undefined;
     const el = mountRef.current;
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -320,7 +330,7 @@ export default function SimulationView({ episode, plan, active = true, compact }
       if (renderer.domElement.parentNode) renderer.domElement.parentNode.removeChild(renderer.domElement);
       sceneRef.current = null;
     };
-  }, [active, isSo101, dark]);
+  }, [active, isSo101, use3d, dark]);
 
   // planned workspace / items overlay
   useEffect(() => {
@@ -384,25 +394,25 @@ export default function SimulationView({ episode, plan, active = true, compact }
   return (
     <div className="relative h-full w-full flex min-h-0 bg-white">
       <div className="relative flex-1 min-w-0">
-        {isSo101 ? (
-          <div ref={mountRef} className="absolute inset-0" />
+        {use3d ? (
+          <SimViewport robotType={robotType} topic={topic} chain={hw?.sim?.chain} items={planItems} height="100%" caption={hw?.sim?.running ? 'simulated follower' : 'follower'} className="!rounded-none !border-0" />
         ) : (
-          <JointBars names={live.names} values={live.values} />
+          <div ref={mountRef} className="absolute inset-0" />
         )}
-        <div className="absolute left-2 top-2 flex flex-wrap gap-1.5">
+        <div className={clsx('absolute left-2 top-2 flex flex-wrap gap-1.5', use3d && 'hidden')}>
           <span className="chip-ink">SIMULATION · live joints</span>
           <span className={clsx(state === 'live' ? 'chip-ok' : state === 'stale' ? 'chip-warn' : 'chip-err')}>
             {state === 'live' ? `LIVE · ${Math.round(age)} ms` : state === 'stale' ? 'STALE — no new joint data' : 'NO JOINT DATA'}
           </span>
           {topic && <span className="chip num">{topic}</span>}
         </div>
-        <div className="absolute left-2 bottom-2 text-[11px] text-ink-3 bg-white/85 px-1.5 py-0.5">
-          {isSo101 ? 'Approximate SO-101 kinematics · ' : ''}boxes = planned positions (not sensed)
+        <div className={clsx('absolute left-2 bottom-2 text-[11px] px-1.5 py-0.5', use3d ? 'font-mono text-[rgba(235,238,242,0.6)]' : 'text-ink-3 bg-white/85')}>
+          {use3d ? (physics ? 'objects: MuJoCo physics' : 'objects: planned positions · no physics') : 'Approximate SO-101 kinematics · boxes = planned positions'}
         </div>
         {problem && (
           <div className="absolute inset-x-2 top-10 bg-signal-errbg border border-signal-err/40 px-2 py-1 text-[12px]">{problem}</div>
         )}
-        {isSo101 && (
+        {isSo101 && !use3d && (
           <button className="absolute right-2 top-2 btn btn-sm bg-white/90" onClick={() => setShowCal(!showCal)}>
             {showCal ? 'Close' : 'Joint mapping…'}
           </button>

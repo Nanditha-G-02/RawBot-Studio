@@ -37,11 +37,13 @@ import {
   MdWarning,
 } from 'react-icons/md';
 import { StatusDot, Toggle } from '../../components/ui';
-import { hwHybrid, hwPlanning, rolloutCommand, rolloutHeartbeat } from '../hardware/hardwareApi';
+import { hwHybrid, hwPlanning, hwSim, rolloutCommand, rolloutHeartbeat } from '../hardware/hardwareApi';
 import { setHardwareStatus } from '../hardware/hardwareSlice';
 import { useHardwareStatus } from '../hardware/useHardwareGate';
 import { JogPanel } from '../hardware/HardwareSetup';
 import SimControl from '../sim/SimControl';
+import SimViewport from '../sim/SimViewport';
+import { SIM_TOPIC } from '../sim/simTopics';
 
 const MANUAL = ['gui', 'keyboard', 'gamepad'];
 const SIM_LEADS = [...MANUAL, 'script', 'replay'];
@@ -142,9 +144,16 @@ function Checks({ checks }) {
   );
 }
 
-export default function PlanningSetup({ compact = false }) {
+// scene: the objects and targets of the selected plan episode (sim/sceneItems.js) - shown in
+// the 3D view and sent to the simulated robot, so its cameras and MuJoCo have them too
+export default function PlanningSetup({ compact = false, scene = null }) {
   const dispatch = useDispatch();
   const robotType = useSelector((s) => s.tasks.taskStatus.robotType);
+  const sceneJson = scene && scene.length ? JSON.stringify(scene) : '';
+  useEffect(() => {
+    if (!sceneJson || !robotType) return;
+    hwSim(robotType, { command: 'scene', items: JSON.parse(sceneJson), label: 'planning' }).catch(() => {});
+  }, [sceneJson, robotType]);
   const offline = useSelector((s) => s.hardware.offline);
   const status = useHardwareStatus();
   const [busy, setBusy] = useState(false);
@@ -298,6 +307,11 @@ export default function PlanningSetup({ compact = false }) {
             )}
           </div>
           <div className="min-w-0">{control}</div>
+          {(sel.target === 'sim' || sim.twin) && sim.running !== false && (
+            <div className="xl:col-span-2" data-plan-sim-view>
+              <SimViewport robotType={robotType} topic={sim.state_topic || SIM_TOPIC} chain={status.sim?.chain} items={scene || undefined} />
+            </div>
+          )}
         </div>
       )}
     </section>

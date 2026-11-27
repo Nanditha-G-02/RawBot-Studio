@@ -6,19 +6,22 @@
 #   ./scripts/install.sh --docker        also build the gateway image
 #   ./scripts/install.sh --robot         also build the robot runtime image (large: ROS 2,
 #                                        LeRobot; needs Docker, ~20 GB disk, 20-40 min)
+#   ./scripts/install.sh --with-mujoco   also install the MuJoCo physics engine for the simulated
+#                                        robot, in its own Python environment (var/sim-venv)
 #   ./scripts/install.sh --import-from DIR
 #                                        copy datasets, plans, runs and checkpoints from an
 #                                        earlier installation (see scripts/import-legacy-data.py)
 # Nothing here moves the robot or starts a service; start PHYSIOS with ./start_physios.sh.
 set -euo pipefail
 PHYSIOS="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-DOCKER=0; ROBOT=0; IMPORT=""
+DOCKER=0; ROBOT=0; MUJOCO=0; IMPORT=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --docker) DOCKER=1 ;;
     --robot) ROBOT=1 ;;
+    --with-mujoco) MUJOCO=1 ;;
     --import-from) IMPORT="${2:?--import-from needs a folder}"; shift ;;
-    -h|--help) sed -n '2,13p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,15p' "$0"; exit 0 ;;
     *) echo "unknown option: $1 (see --help)"; exit 2 ;;
   esac
   shift
@@ -73,6 +76,19 @@ fi
 ( cd "$PHYSIOS/backend" && "$PY" -m physios_gateway --check-config >/dev/null ) && ok "gateway configuration valid" \
   || fail "configuration invalid: run (cd backend && python3 -m physios_gateway --check-config)"
 
+if [[ $MUJOCO == 1 ]]; then
+  # the training service stays standard-library only; MuJoCo runs in this separate Python
+  # (hardware/mujoco_worker.py), found through PHYSIOS_SIM_PYTHON or var/sim-venv
+  echo "MuJoCo physics"
+  SIMPY="$PHYSIOS/var/sim-venv/bin/python"
+  if [[ ! -x "$SIMPY" ]]; then
+    "$PY" -m venv "$PHYSIOS/var/sim-venv" >"$PHYSIOS/var/install-mujoco.log" 2>&1 \
+      || fail "could not create var/sim-venv (Ubuntu: sudo apt install python3-venv), see var/install-mujoco.log"
+  fi
+  "$SIMPY" -m pip install --upgrade --quiet pip mujoco >>"$PHYSIOS/var/install-mujoco.log" 2>&1 \
+    || fail "pip install mujoco failed, see var/install-mujoco.log"
+  ok "MuJoCo $("$SIMPY" -c 'import mujoco; print(mujoco.__version__)'): Planning -> Robot & control -> Engine: MuJoCo"
+fi
 if [[ $DOCKER == 1 ]]; then echo "gateway image"; "$PHYSIOS/docker/physios-docker.sh" build gateway; fi
 if [[ $ROBOT == 1 ]]; then echo "robot runtime image"; "$PHYSIOS/docker/physios-docker.sh" build robot; fi
 

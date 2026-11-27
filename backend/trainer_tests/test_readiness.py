@@ -238,6 +238,16 @@ def test_read_only_robot_needs_no_motion_test(reg):
     assert 'leader:/ufactory/joint_states' in y['yaml']
     # a configuration error makes it not read-only (nothing is exported from a broken config)
     assert p['config']['command_interface'] == 'none'
+    # Stage 4 (data and training check) needs no Stage 3 for it, and does not fake Stages 2-3
+    assert r['stages'][3]['status'] == 'ready' and not r['allowed']['train']
+    st.verify_data(rid, 'smolvla')
+    r = st.get(rid)['readiness']
+    assert r['stages'][3]['status'] == 'done' and r['allowed']['train']
+    assert r['stage'] == 1 and r['stages'][1]['status'] != 'done'
+    # a changed configuration needs the check again
+    st.save_config(rid, good_cfg(st, rid, command_interface='none', command_topic='',
+                                  leader_topic='/arm/joint_states', control_frequency_hz=50))
+    assert not st.get(rid)['readiness']['allowed']['train']
 
 
 def test_apply_server_config_writes_and_restarts(reg, tmp_path):

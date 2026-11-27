@@ -75,6 +75,14 @@ class Robot:
     def params(self):
         if not self.robot_type:
             return {}
+        # STANDIN_TYPE_PARAMS: a JSON file {robot_type: parameters} - what an applied robot
+        # configuration gives the robot server (custom robots in UI tests)
+        f = os.environ.get('STANDIN_TYPE_PARAMS')
+        if f and os.path.isfile(f):
+            with open(f) as fh:
+                own = json.load(fh).get(self.robot_type)
+            if own:
+                return own
         return {'camera_topic_list': ['global:/camera/color/image_raw/compressed',
                                       'gripper:/gripper_camera/color/image_raw/compressed'],
                 'joint_topic_list': ['follower:/joint_states', 'leader:/leader/joint_trajectory'],
@@ -202,6 +210,9 @@ class Robot:
         if name == '/rosapi/publishers':
             extra = os.environ.get('STANDIN_EXTRA_PUBLISHER')
             topic = args.get('topic', '')
+            if extra and '=' in extra:
+                # "topic=node,...": that node publishes that topic (an arm driver in UI tests)
+                extra = dict(e.split('=', 1) for e in extra.split(',') if '=' in e).get(topic)
             teleop = ['/so101_bridge'] if (self.teleop and 'leader' in topic
                                            and self.robot_type) else []
             # like ROS: the cameras and bridge.py's follower state have their own nodes
@@ -233,7 +244,8 @@ class Robot:
                     res.append({'successful': False, 'reason': 'parameter not declared'})
             return {'results': res}
         if name == '/get_robot_types':
-            return {'robot_types': ['s101_dataset', 'omx_f']}
+            extra = [t for t in os.environ.get('STANDIN_EXTRA_TYPES', '').split(',') if t]
+            return {'robot_types': ['s101_dataset', 'omx_f'] + extra}
         if name == '/set_robot_type':
             self.robot_type = args.get('robot_type', '')
             return {'success': True, 'message': 'Robot type set to %s' % self.robot_type}

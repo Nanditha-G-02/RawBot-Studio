@@ -73,6 +73,10 @@ export function parseUrdf(text) {
       upper: lim && lim.getAttribute('upper') !== null ? Number(lim.getAttribute('upper')) : null,
       velocity: lim && lim.getAttribute('velocity') ? Number(lim.getAttribute('velocity')) : null,
       effort: lim && lim.getAttribute('effort') ? Number(lim.getAttribute('effort')) : null,
+      mimic: (() => {
+        const m = j.querySelector(':scope > mimic');
+        return m ? { joint: m.getAttribute('joint'), multiplier: Number(m.getAttribute('multiplier') ?? 1), offset: Number(m.getAttribute('offset') ?? 0) } : null;
+      })(),
       el: j,
     };
     joints[info.name] = info;

@@ -13,6 +13,14 @@ It has the joints of the robot configuration and follows a target at a limited j
     script   - a list of waypoints, played in order (optionally looping)
     replay   - a recorded trajectory (timestamps + joint rows), played back in time
 
+What the joints then do is the simulation backend's (physics.py): 'kinematic' (built in) reaches
+the target at a limited speed; 'mujoco' sends the target to MuJoCo position actuators and
+publishes the joints the physics produced (gravity, contacts with the table and objects).
+
+The scene - the plan episode's objects and targets, metres in the robot base frame - is set by
+the Record page ('scene' command) and published with the objects' poses (planned, or from the
+physics) on OBJECTS_TOPIC, so the 3D view and the simulated cameras draw the same world.
+
 It always publishes sensor_msgs/JointState (positions and velocities) on SIM_TOPIC. It also
 publishes the follower state topic of the robot configuration, but only when the manager
 allows it (the configuration has no physical follower and nothing else publishes that
@@ -21,6 +29,7 @@ the dataset format does not change. It never publishes on the command (leader) t
 cannot move a physical arm.
 """
 
+import json
 import math
 import threading
 import time
@@ -32,6 +41,10 @@ SIM_TOPIC = '/rawbot/sim/joint_states'
 # bridge.py): a JointState that physical_ai_server records as the action
 # (action_source 'leader_state'). Not a command topic: nothing moves an arm from it.
 LEADER_STATE_TOPIC = '/rawbot/leader/joint_states'
+# the scene objects and their poses: std_msgs/String, JSON {backend, items: [{id, role, size,
+# color, p: [x, y, z], q: [w, x, y, z]}]} in the robot base frame (metres)
+OBJECTS_TOPIC = '/rawbot/sim/objects'
+OBJECTS_KINEMATIC_HZ = 5.0
 LEADER_STALE_S = 0.5    # older leader readings: the simulated follower holds
 RATE_HZ = 30.0
 HOLD_S = 0.3            # a keyboard / gamepad velocity expires after this
@@ -52,6 +65,38 @@ def joint_state(names, pos, vel):
             'name': list(names), 'position': [float(p) for p in pos],
             'velocity': [float(v) for v in vel], 'effort': []}
 
+
+
+def _item(it):
+    """A scene object from the page: metres and degrees in the robot base frame."""
+    try:
+        out = {'id': str(it['id'])[:40], 'role': 'target' if it.get('role') == 'target'
+               else 'object', 'x': float(it['x']), 'y': float(it['y']),
+               'yaw': float(it.get('yaw') or 0.0),
+               'size': max(0.005, min(0.5, float(it.get('size') or 0.03)))}
+    except (KeyError, TypeError, ValueError):
+        raise ValueError('A scene object needs an id and x, y in metres.')
+    if it.get('color'):
+        out['color'] = str(it['color'])[:16]
+    if it.get('name'):
+        out['name'] = str(it['name'])[:60]
+    return out
+
+
+UNIT_SCALE = {'deg': math.pi / 180.0, 'mm': 0.001}
+
+
+def joint_mapping(rows):
+    """ROS joint -> (URDF joint, direction, offset, scale) from the robot configuration's
+    joint rows: URDF value = direction * (ROS value * scale) + offset."""
+    out = {}
+    for r in rows or []:
+        if not r.get('urdf_joint') or r.get('enabled') is False:
+            continue
+        out[r.get('ros_joint') or r['urdf_joint']] = (
+            r['urdf_joint'], -1.0 if r.get('direction') == -1 else 1.0,
+            float(r.get('offset') or 0.0), UNIT_SCALE.get(r.get('units'), 1.0))
+    return out
 
 
 def _drop(br):
@@ -102,6 +147,13 @@ class SimRobot:
         self.leader_sampler = None
         self.leader_pub = False   # publish the leader joints on LEADER_STATE_TOPIC
         self.leader_in = None     # last leader reading as used: names, values, age, ...
+        self.physics = None       # physics backend (physics.MujocoBackend) or None: kinematic
+        self.phys_sim = None      # the robot for the physics: {urdf, mesh_map, joints, reach}
+        self.mapping = {}         # ROS joint -> (URDF joint, direction, offset, scale)
+        self.scene = {'items': [], 'rev': 0}
+        self.measured = None      # (positions, velocities) from the physics, ROS units
+        self.objects = None       # last object poses (physics), else the planned ones
+        self._obj_t = 0.0
         self._last = None
         self._stop = False
         if thread:
@@ -110,7 +162,7 @@ class SimRobot:
     # ---- configuration ----------------------------------------------------------------
     def ensure(self, robot_type, run, topics, names=None, state_topic=None,
                leader_sampler=None, leader_pub=False, limits=None, pairs=None,
-               kinematics=None):
+               kinematics=None, physics=None, phys_sim=None, mapping=None):
         """Called by the manager on every status: start / stop, joints, allowed topics.
         limits: the robot's joint limits (URDF), applied when the joints change."""
         with self.lock:
@@ -118,6 +170,14 @@ class SimRobot:
             if kinematics is not None:
                 self.kin, self.ws = kinematics.get('model'), kinematics.get('workspace')
             self.pairs = dict(pairs or {})     # target joint -> leader joint (mixed robots)
+            if mapping is not None:
+                self.mapping = dict(mapping)
+            if physics is not self.physics:
+                if self.physics is not None:
+                    self.physics.stop()
+                self.physics = physics
+                self.measured = None
+            self.phys_sim = phys_sim if physics is not None else None
             self.leader_sampler = leader_sampler if run else None
             self.leader_pub = bool(run and leader_pub and leader_sampler)
             if robot_type != self.robot_type:
@@ -133,6 +193,9 @@ class SimRobot:
                 self._last = None
             elif not run and self.running:
                 self.running = False
+                if self.physics is not None:
+                    self.physics.stop()
+                self.measured = None
                 self.drive = 'manual'
                 self.hold = {}
                 self.script = self.replay = None
@@ -162,6 +225,13 @@ class SimRobot:
     def command(self, body):
         cmd = (body or {}).get('command')
         with self.lock:
+            if cmd == 'scene':
+                # the scene is kept while the simulated robot is off (the Record page sets it)
+                self.scene = {'items': [_item(i) for i in body.get('items') or []][:32],
+                              'rev': self.scene['rev'] + 1,
+                              'label': str(body.get('label') or '')[:120]}
+                self.objects = None
+                return self.view()
             if not self.running:
                 raise ValueError('The simulated robot is off. Turn on the simulated twin or '
                                  'choose Simulation Only.')
@@ -255,12 +325,22 @@ class SimRobot:
                 self.drive = 'manual'
                 self.hold = {}
                 self.script = self.replay = None
+            elif cmd == 'scene_reset':
+                if self.physics is not None:
+                    self.physics.place(self._phys_items())
             elif cmd == 'capture_start':
                 self.rec = {'t0': _now(), 'samples': []}
             elif cmd == 'capture_cancel':
                 self.rec = None
             elif cmd == 'speed':
                 self.speed = max(0.05, min(6.0, float(body.get('speed'))))
+            elif cmd == 'limits' and body.get('reset'):
+                # back to the robot model's limits (URDF), +-pi where the model has none
+                dl = getattr(self, 'default_limits', None) or {}
+                for i, x in enumerate(self.names):
+                    self.lo[i], self.hi[i] = (float(dl[x][0]), float(dl[x][1])) if x in dl \
+                        else (-math.pi, math.pi)
+                    self.target[i] = self._clamp(i, self.target[i])
             elif cmd == 'limits':
                 for k, (lo, hi) in (body.get('limits') or {}).items():
                     i = self._idx(k)
@@ -331,6 +411,61 @@ class SimRobot:
 
     def _clamp(self, i, v):
         return max(self.lo[i], min(self.hi[i], v))
+
+    # ---- physics ---------------------------------------------------------------------------
+    def to_urdf(self, name, v):
+        m = self.mapping.get(name)
+        if not m:
+            return name, v
+        return m[0], m[1] * v * m[3] + m[2]
+
+    def from_urdf(self, name, u):
+        m = self.mapping.get(name)
+        if not m:
+            return u
+        return ((u - m[2]) * m[1]) / m[3]
+
+    def _phys_items(self):
+        return [{k: it[k] for k in ('id', 'role', 'x', 'y', 'yaw', 'size')}
+                for it in self.scene['items']]
+
+    def _physics_tick(self):
+        """Send the joint targets to the physics and take what it produced. Lock held."""
+        ph = self.physics
+        if ph is None or not self.phys_sim:
+            self.measured = None
+            return
+        q = dict(self.to_urdf(n, p) for n, p in zip(self.names, self.pos))
+        ph.sync(self.phys_sim, self._phys_items(), q)
+        ph.set_targets(q)
+        st = ph.latest()
+        if not st:
+            self.measured = None
+            return
+        pos, vel = [], []
+        for i, n in enumerate(self.names):
+            u = self.to_urdf(n, 0.0)[0]
+            if u in st['q']:
+                pos.append(self.from_urdf(n, st['q'][u]))
+                vel.append(self.from_urdf(n, st['v'].get(u, 0.0)) - self.from_urdf(n, 0.0))
+            else:
+                pos.append(self.pos[i])
+                vel.append(self.vel[i])
+        self.measured = (pos, vel)
+        by_id = {o['id']: o for o in st.get('objects') or []}
+        self.objects = [dict(it, p=by_id[it['id']]['p'], q=by_id[it['id']]['q'])
+                        for it in self.scene['items'] if it['id'] in by_id]
+
+    def _objects_msg(self):
+        if self.measured is not None and self.objects is not None:
+            items, backend = self.objects, 'mujoco'
+        else:
+            items, backend = [dict(it, p=[it['x'], it['y'], 0.0], q=[
+                math.cos(math.radians(it['yaw']) / 2), 0.0, 0.0,
+                math.sin(math.radians(it['yaw']) / 2)]) for it in self.scene['items']], \
+                'kinematic'
+        return {'data': json.dumps({'backend': backend, 'rev': self.scene['rev'],
+                                    'items': items})}
 
     # ---- simulation step -------------------------------------------------------------------
     def step(self, dt):
@@ -429,8 +564,17 @@ class SimRobot:
         with self.lock:
             if not self.running:
                 return
-            msg = joint_state(self.names, self.pos, self.vel)
+            self._physics_tick()
+            pos, vel = self.measured if self.measured is not None else (self.pos, self.vel)
+            msg = joint_state(self.names, pos, vel)
             topics = [SIM_TOPIC] + ([self.state_topic] if self.state_topic else [])
+            now = _now()
+            objs = None
+            # objects once a scene was set (none before: nothing to draw)
+            if self.scene['rev'] and (self.measured is not None or
+                                      now - self._obj_t >= 1.0 / OBJECTS_KINEMATIC_HZ):
+                self._obj_t = now
+                objs = self._objects_msg()
             li = self.leader_in
             lead = None
             if self.leader_pub and self.drive == 'leader' and li and not li['stale']:
@@ -447,6 +591,11 @@ class SimRobot:
                     self.br.advertise(t, 'sensor_msgs/msg/JointState')
                     self._advertised.add(t)
                 self.br.publish(t, msg)
+            if objs is not None:
+                if OBJECTS_TOPIC not in self._advertised:
+                    self.br.advertise(OBJECTS_TOPIC, 'std_msgs/msg/String')
+                    self._advertised.add(OBJECTS_TOPIC)
+                self.br.publish(OBJECTS_TOPIC, objs)
             if lead is not None:
                 if LEADER_STATE_TOPIC not in self._advertised:
                     self.br.advertise(LEADER_STATE_TOPIC, 'sensor_msgs/msg/JointState')
@@ -475,6 +624,8 @@ class SimRobot:
 
     def stop(self):
         self._stop = True
+        if self.physics is not None:
+            self.physics.stop()
 
     # ---- view ------------------------------------------------------------------------------
     def owns(self, topic):
@@ -483,13 +634,20 @@ class SimRobot:
     def view(self):
         with self.lock:
             tool = self.kin.fk(dict(zip(self.names, self.pos))) if self.kin else None
+            phys = self.physics.view() if self.physics is not None else None
+            shown = self.measured[0] if self.measured is not None else self.pos
             out = {'running': self.running, 'drive': self.drive, 'names': list(self.names),
+                   'backend': phys['backend'] if phys else 'kinematic', 'physics': phys,
+                   'scene': self.scene, 'objects_topic': OBJECTS_TOPIC,
+                   'commanded': [round(p, 5) for p in self.pos],
                    'tool_mm': [round(v * 1000, 1) for v in tool] if tool else None,
                    'kinematics': bool(self.kin), 'blocked': self.blocked,
-                   'positions': [round(p, 5) for p in self.pos],
+                   'positions': [round(p, 5) for p in shown],
                    'velocities': [round(v, 5) for v in self.vel],
                    'target': [round(p, 5) for p in self.target],
                    'limits': [[lo, hi] for lo, hi in zip(self.lo, self.hi)],
+                   'model_limits': any(x in (getattr(self, 'default_limits', None) or {})
+                                       for x in self.names),
                    'speed': self.speed, 'topic': SIM_TOPIC,
                    'state_topic': self.state_topic if self.running else None,
                    'error': self.error if self.running else None,
