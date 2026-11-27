@@ -95,6 +95,23 @@ export const MODE_OPTIONS = [
   { value: 'simulation', label: 'Simulation Only', short: 'Sim' },
 ];
 
+// leader / follower: 'real' or 'sim' -> hardware configuration (mode), and back. leader_only
+// (older setups) reads as a real leader with its simulated follower, which is what it records.
+const ROLE_MODES = {
+  'real|real': 'leader_follower',
+  'real|sim': 'leader_sim',
+  'sim|real': 'follower_only',
+  'sim|sim': 'simulation',
+};
+export const modeFor = (leader, follower) => ROLE_MODES[`${leader}|${follower}`];
+export const rolesOf = (mode) => {
+  const m = mode === 'leader_only' ? 'leader_sim' : mode;
+  const k = Object.keys(ROLE_MODES).find((x) => ROLE_MODES[x] === m);
+  if (!k) return { leader: null, follower: null };
+  const [leader, follower] = k.split('|');
+  return { leader, follower };
+};
+
 export const STATE_LABEL = {
   connected: 'Connected',
   connecting: 'Connecting…',

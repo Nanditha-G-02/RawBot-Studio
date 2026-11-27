@@ -59,7 +59,7 @@ export default function RobotsPage() {
               {view.mode === 'setup'
                 ? 'Choose the robot, add its model file if it is a custom robot, set up the hardware you have and verify it, then continue to Planning.'
                 : view.mode === 'hardware'
-                ? 'Choose which arms you have, detect and connect them one at a time, calibrate each arm and see what the connected hardware allows.'
+                ? 'Real or simulated, per arm.'
                 : 'Add a robot from its URDF, check it, look at it in 3D, then configure and verify it step by step. Recording and training unlock only after the robot has been verified on hardware.'}
             </p>
           </div>

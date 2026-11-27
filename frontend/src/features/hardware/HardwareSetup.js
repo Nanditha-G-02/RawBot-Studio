@@ -24,12 +24,13 @@ import { useDispatch, useSelector } from 'react-redux';
 import ROSLIB from 'roslib';
 import toast from 'react-hot-toast';
 import clsx from 'clsx';
-import { Callout, Field, KeyValue, Modal, Segmented, Select, Sheet, Spinner, StatusDot, TextInput } from '../../components/ui';
+import { Callout, Field, KeyValue, Modal, Select, Sheet, Spinner, StatusDot, TextInput } from '../../components/ui';
 import rosConnectionManager from '../../utils/rosConnectionManager';
 import { usePlanningService } from '../../hooks/usePlanningService';
 import { trainerFetch } from '../../hooks/useTrainer';
 import * as api from './hardwareApi';
-import { MODE_OPTIONS, STATE_LABEL, stateTone } from './hardwareApi';
+import { STATE_LABEL, stateTone } from './hardwareApi';
+import ArmChoice from './ArmChoice';
 import { setHardwareStatus } from './hardwareSlice';
 import { refreshHardware } from './HardwareMonitor';
 import useHeldInput from '../sim/useHeldInput';
@@ -188,7 +189,9 @@ function JointComm({ card }) {
   );
 }
 
-function ArmCard({ robotType, card, busy, run, onConfigure, onCalibrate, rosbridgeUrl }) {
+// serial: RawBot Studio can open this robot's arms over USB (SO-101 motor table); otherwise the
+// arm is reached through ROS only, so the USB, motor and calibration rows and buttons are hidden
+function ArmCard({ robotType, card, busy, run, onConfigure, onCalibrate, rosbridgeUrl, serial = true }) {
   const name = ROLE_NAME[card.role];
   const tone = stateTone(card.state);
   const dimmed = card.state === 'unused';
@@ -213,11 +216,11 @@ function ArmCard({ robotType, card, busy, run, onConfigure, onCalibrate, rosbrid
         <p className="text-[12.5px] text-ink-2 min-h-[18px]" data-arm-detail>{card.detail}</p>
         <KeyValue
           rows={[
-            ['Connection', card.state === 'connected' ? (card.source === 'ros' ? 'Verified · live ROS messages from bridge.py' : 'Verified · every motor answers (read-only)') : STATE_LABEL[card.state]],
+            ['Connection', card.state === 'connected' ? (card.source === 'ros' ? `Verified · live joints on ${card.topic}` : 'Verified · every motor answers (read-only)') : STATE_LABEL[card.state]],
             card.publishes && ['ROS', <span data-arm-publishes={card.publishes}>Publishing <span className="font-mono">{card.publishes}</span> from this session</span>],
             card.publish_error && ['ROS', <span className="text-signal-err" data-arm-publish-error>Not publishing: ROS not reachable</span>],
             card.publish_pending && ['ROS', <span className="text-ink-3" data-arm-publish-pending>Starting to publish <span className="font-mono">{card.publish_pending}</span>…</span>],
-            [
+            serial && [
               'Serial port',
               port ? (
                 <span className="font-mono text-[11.5px] break-all" data-arm-port>
@@ -231,7 +234,7 @@ function ArmCard({ robotType, card, busy, run, onConfigure, onCalibrate, rosbrid
                 <span className="text-ink-3">—</span>
               ),
             ],
-            card.device && [
+            serial && card.device && [
               'Identity',
               <span className="text-[11.5px]">
                 USB {card.device.vid}:{card.device.pid}
@@ -239,12 +242,13 @@ function ArmCard({ robotType, card, busy, run, onConfigure, onCalibrate, rosbrid
               </span>,
             ],
             card.holders?.length > 0 && ['Held by', <span className="font-mono text-[11.5px]">{card.holders.map((h) => `${h.name} (PID ${h.pid})`).join(', ')}</span>],
-            ['Motor IDs', <MotorChips card={card} />],
-            ['Calibration', <span data-arm-calibration={card.role}>{card.calibration?.text || '—'}</span>],
+            serial && ['Motor IDs', <MotorChips card={card} />],
+            serial && ['Calibration', <span data-arm-calibration={card.role}>{card.calibration?.text || '—'}</span>],
             ['Joints', <JointComm card={card} />],
           ]}
         />
         {card.state === 'connected' && <LiveJoints robotType={robotType} card={card} rosbridgeUrl={rosbridgeUrl} />}
+        {serial && (
         <div className="flex flex-wrap gap-2 pt-1">
           {card.can_connect && (
             <button
@@ -275,7 +279,8 @@ function ArmCard({ robotType, card, busy, run, onConfigure, onCalibrate, rosbrid
             Configure
           </button>
         </div>
-        {!card.can_calibrate && card.calibrate_reason && !dimmed && (
+        )}
+        {serial && !card.can_calibrate && card.calibrate_reason && !dimmed && (
           <p className="text-[11.5px] text-ink-3">Calibrate: {card.calibrate_reason}</p>
         )}
       </div>
@@ -988,7 +993,6 @@ export default function HardwareSetup() {
       </Sheet>
     );
   }
-  const used = (MODE_OPTIONS.find((m) => m.value === status.mode) || {}).value;
   const scan = status.scan_supported;
   return (
     <div className="grid gap-4" data-hardware-setup data-mode={status.mode}>
@@ -1000,37 +1004,20 @@ export default function HardwareSetup() {
             <button className="btn btn-sm" onClick={() => run('refresh', () => api.hwStatus(robotType))} disabled={!!busy} data-action="hw-refresh">
               {busy === 'refresh' ? <Spinner /> : '↻'} Refresh Status
             </button>
-            <button className="btn-primary btn-sm" onClick={() => run('detect', () => api.hwDetect(robotType))} disabled={!!busy || status.mode === 'simulation'} data-action="hw-detect">
-              {busy === 'detect' && <Spinner className="border-paper border-t-transparent" />} Detect Hardware
-            </button>
+            {scan && (
+              <button className="btn-primary btn-sm" onClick={() => run('detect', () => api.hwDetect(robotType))} disabled={!!busy || status.mode === 'simulation'} data-action="hw-detect">
+                {busy === 'detect' && <Spinner className="border-paper border-t-transparent" />} Detect Hardware
+              </button>
+            )}
             <button className="btn-danger btn-sm" onClick={() => api.hwEstop('page').then((r) => toast(`Emergency stop: ${r.stopped.join(', ') || 'nothing was moving'}`, { icon: '■' }))} data-action="hw-estop" title="Stops jog, rollout and calibration. Also available without a browser: ./scripts/estop.sh">
               ■ Stop all
             </button>
           </>
         }
       >
-        <div className="grid gap-3 lg:grid-cols-[auto_1fr] items-center">
-          <div>
-            <div className="label mb-1">Hardware configuration</div>
-            <Segmented
-              value={used}
-              onChange={(v) => run('mode', () => api.hwSetup(robotType, { mode: v }))}
-              options={MODE_OPTIONS.map((m) => ({ value: m.value, label: m.label }))}
-              data-mode-select
-            />
-          </div>
-          <div className="text-[12.5px] text-ink-3 lg:pl-4">
-            {status.mode === 'simulation'
-              ? 'No physical robot: planning, the 3D model, the simulation view and training work; recording and anything that moves an arm are off.'
-              : status.mode === 'leader_sim'
-              ? 'One physical arm: the leader drives the simulated follower in real time. Connect the leader here (read-only session, no bridge.py needed) or through bridge.py; record demonstrations from Planning → Robot & control.'
-              : status.mode === 'leader_only'
-              ? 'Only the leader arm: calibrate it, monitor its joints and capture its trajectories. Connecting a follower later enables Leader + Follower.'
-              : status.mode === 'follower_only'
-              ? 'Only the follower arm: calibrate it, control it directly, run policies and record hand-guided demonstrations. Connecting a leader later enables Leader + Follower.'
-              : 'Both arms: teleoperation and synchronized demonstration recording (the original workflow).'}
-            {status.mode_source === 'auto' && <span className="chip-sky text-[10px] ml-1.5">switched automatically</span>}
-          </div>
+        <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
+          <ArmChoice mode={status.mode} onChange={(v) => run('mode', () => api.hwSetup(robotType, { mode: v }))} disabled={!!busy} />
+          {status.mode_source === 'auto' && <span className="chip-sky text-[10px]">switched automatically</span>}
         </div>
         <div className="mt-3 flex flex-wrap gap-x-5 gap-y-1 text-[11.5px] text-ink-3">
           <span>
@@ -1041,7 +1028,6 @@ export default function HardwareSetup() {
           </span>
           <span>Follower topic <span className="font-mono">{status.topics?.follower || '—'}</span></span>
           <span>Leader / command topic <span className="font-mono">{status.topics?.leader || '—'}</span></span>
-          {!scan && <span>Motor scans: SO-101 only - this robot is detected through ROS.</span>}
           {!status.platform_ports && <span>Port list from the LeRobot environment (no Linux sysfs).</span>}
         </div>
       </Sheet>
@@ -1055,6 +1041,7 @@ export default function HardwareSetup() {
             busy={busy}
             run={run}
             rosbridgeUrl={rosbridgeUrl}
+            serial={scan}
             onConfigure={setCfgRole}
             onCalibrate={(r) =>
               run(`cal-${r}`, async () => {

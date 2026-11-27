@@ -20,7 +20,8 @@ import React, { useState } from 'react';
 import { useDispatch } from 'react-redux';
 import clsx from 'clsx';
 import toast from 'react-hot-toast';
-import { MODE_OPTIONS, STATE_LABEL, hwSetup } from './hardwareApi';
+import { STATE_LABEL, hwSetup } from './hardwareApi';
+import ArmChoice from './ArmChoice';
 import { setHardwareStatus } from './hardwareSlice';
 import { useHardwareStatus } from './useHardwareGate';
 
@@ -49,35 +50,12 @@ export default function HomeSetupRow({ robotType, onOpen, disabled }) {
   return (
     <div className="space-y-2" data-home-hardware>
       <div className="flex items-center justify-between gap-2">
-        <div className="label text-[9.5px] tracking-[0.12em]">Hardware setup</div>
+        <div className="label text-[9.5px] tracking-[0.12em]">Arms</div>
         <button type="button" className="lg-btn lg-btn-sm" onClick={onOpen} data-action="open-hardware">
           Detect &amp; connect →
         </button>
       </div>
-      <div className="grid grid-cols-4 gap-1 rounded-[14px] bg-[#EEF0F3] p-1" role="radiogroup" aria-label="Available hardware">
-        {MODE_OPTIONS.map((m) => {
-          const on = status?.mode === m.value;
-          return (
-            <button
-              key={m.value}
-              type="button"
-              role="radio"
-              aria-checked={on}
-              data-home-mode={m.value}
-              disabled={!status || disabled || !!saving}
-              onClick={() => choose(m.value)}
-              title={m.label}
-              className={clsx(
-                'rounded-[10px] px-1.5 py-1.5 text-[11.5px] font-medium leading-tight transition-all',
-                on ? 'bg-white text-[#0B0C0E] shadow-[0_1px_2px_rgba(11,12,14,0.12)]' : 'text-[#6B7079] hover:text-[#0B0C0E]',
-                !status && 'opacity-60'
-              )}
-            >
-              {m.label}
-            </button>
-          );
-        })}
-      </div>
+      <ArmChoice variant="home" mode={status?.mode} onChange={choose} disabled={!status || disabled || !!saving} />
       {status ? (
         <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11.5px] text-[#6B7079]">
           {['leader', 'follower'].map((role) => {

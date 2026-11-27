@@ -2,6 +2,12 @@
 
 ## 2.0.0, renamed (2026-11-13)
 
+* **Arms: Real or Sim per role.** Home, Robot setup and the Hardware page choose each arm
+  (leader, follower) as real or simulated instead of picking one of five named configurations;
+  the configuration follows from the pair (Leader Only, from older setups, reads as a real leader
+  with its simulated follower). Arms reached through ROS (any robot without the SO-101 motor table)
+  no longer show USB, motor-ID and calibration rows or the Detect / Connect / Calibrate buttons.
+
 * **An arm's own driver as the leader.** A leader topic carrying JointState (the arm's joints,
   e.g. a UFACTORY arm in manual mode) is recognised (topic type from rosapi) and handled like the
   serial leader: the simulated follower copies it, it is recorded as the action. `physios-xarm`

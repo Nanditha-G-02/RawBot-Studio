@@ -116,11 +116,30 @@ def nav(page, name):
         'button', name=re.compile(r'(^|\s)%s$' % name)).click()
 
 
+ROLES = {'leader_follower': ('real', 'real'), 'leader_sim': ('real', 'sim'),
+         'follower_only': ('sim', 'real'), 'simulation': ('sim', 'sim')}
+
+
 def mode(page, value):
+    """Pick the hardware configuration on Home: one Real/Sim choice per arm. leader_only (older
+    setups, no longer offered) is set through the API, then shown as real leader + sim."""
     nav(page, 'Home')
-    page.locator(f'[data-home-mode="{value}"]').click()
-    expect(page.locator(f'[data-home-mode="{value}"]')).to_have_attribute('aria-checked', 'true',
-                                                                          timeout=8000)
+    if value == 'leader_only':
+        req = urllib.request.Request(
+            'http://127.0.0.1:8766/hardware/setup',
+            data=json.dumps({'robot_type': RT, 'mode': 'leader_only'}).encode(),
+            headers={'Content-Type': 'application/json'})
+        urllib.request.urlopen(req, timeout=10).read()
+        expect(page.locator('[data-home-hardware] [data-mode-choice]')).to_have_attribute(
+            'data-mode-choice', 'leader_only', timeout=12000)
+        return
+    box = page.locator('[data-home-hardware]')
+    for role, kind in zip(('leader', 'follower'), ROLES[value]):
+        b = box.locator(f'[data-arm="{role}"][data-choice="{kind}"]')
+        if b.get_attribute('aria-checked') != 'true':
+            b.click()
+            page.wait_for_timeout(400)
+    expect(box.locator('[data-mode-choice]')).to_have_attribute('data-mode-choice', value, timeout=8000)
 
 
 def panel(page):

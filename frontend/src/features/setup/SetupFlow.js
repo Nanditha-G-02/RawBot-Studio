@@ -51,6 +51,7 @@ import UrdfViewer from '../robots/UrdfViewer';
 import ValidationReport from '../robots/ValidationReport';
 import HardwareSetup from '../hardware/HardwareSetup';
 import { MODE_OPTIONS, STATE_LABEL, hwSetup, hwStatus } from '../hardware/hardwareApi';
+import ArmChoice from '../hardware/ArmChoice';
 import { setHardwareStatus } from '../hardware/hardwareSlice';
 import { useHardwareStatus } from '../hardware/useHardwareGate';
 
@@ -655,27 +656,7 @@ function ModeChooser({ robotType }) {
       .then((st) => setMode(st.mode))
       .catch(() => setMode(''));
   }, [robotType, status]);
-  return (
-    <div className="grid gap-2 sm:grid-cols-4" role="radiogroup" aria-label="Available hardware">
-      {MODE_OPTIONS.map((m) => (
-        <button
-          key={m.value}
-          type="button"
-          role="radio"
-          aria-checked={current === m.value}
-          disabled={busy}
-          data-setup-mode={m.value}
-          onClick={() => choose(m.value)}
-          className={clsx(
-            'rounded-2xl px-3 py-2.5 text-left border transition-colors',
-            current === m.value ? 'border-blue-600 bg-blue-50' : 'border-transparent bg-paper hover:bg-paper-2'
-          )}
-        >
-          <div className="text-[13px] font-semibold">{m.label}</div>
-        </button>
-      ))}
-    </div>
-  );
+  return <ArmChoice mode={current} onChange={choose} disabled={busy} />;
 }
 
 function StepHardware({ view, setView }) {
@@ -685,17 +666,9 @@ function StepHardware({ view, setView }) {
   if (view.kind === 'custom') {
     const key = customKey(view.customId || '');
     return (
-      <Sheet title="3 · Which hardware do you have?" code="S3">
-        <p className="text-[13px] text-ink-3 mb-4 max-w-3xl">
-          Choose the arms you have for this robot. The choice decides which features are offered later.
-        </p>
+      <Sheet title="3 · Arms" code="S3">
         <ModeChooser robotType={key} />
-        <div className="mt-4">
-          <Callout tone="info" title="How a custom robot's hardware is checked">
-            Automatic detection and per-arm connection are built for SO-101 arms. A custom robot is checked through ROS in the next step:
-            its topics and joints are compared with the model, then one joint is moved in a supervised test that you authorise.
-          </Callout>
-        </div>
+        <p className="mt-3 text-[12px] text-ink-3">Real arms are checked through ROS in the next step.</p>
         <Footer onBack={back}>
           <button className="btn-primary" onClick={() => setView({ step: 4 })} data-action="setup-next">
             Next: verify →
@@ -710,11 +683,6 @@ function StepHardware({ view, setView }) {
   return (
     <div className="grid gap-4">
       <Sheet title={`3 · Hardware for ${robotType || 'the robot'}`} code="S3">
-        <p className="text-[13px] text-ink-3 max-w-3xl">
-          Choose which arms you have, press <span className="font-medium text-ink">Detect Hardware</span> the first time, assign each adapter as leader or
-          follower, and connect or calibrate each arm on its own. Arms that are driven by bridge.py show as connected as soon as their joint
-          messages arrive.
-        </p>
         <Footer onBack={back}>
           {status && !sim && !ready && <span className="text-[12px] text-ink-3">You can continue; step 4 shows what is still missing.</span>}
           <button className="btn-primary" onClick={() => setView({ step: 4 })} data-action="setup-next">
