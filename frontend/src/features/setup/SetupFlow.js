@@ -435,6 +435,7 @@ function SimGripperCard({ robot, onChanged }) {
   const has = !!robot.sim_gripper;
   const [open, setOpen] = useState(80);
   const [len, setLen] = useState(60);
+  const [fingers, setFingers] = useState(2);
   const [busy, setBusy] = useState(false);
   const run = async (body, done) => {
     setBusy(true);
@@ -457,7 +458,7 @@ function SimGripperCard({ robot, onChanged }) {
       {has ? (
         <>
           <div className="mt-2 text-[12px] text-ink-3">
-            Opening {Math.round(robot.sim_gripper.opening * 1000)} mm · fingers {Math.round(robot.sim_gripper.finger_length * 1000)} mm, on{' '}
+            {robot.sim_gripper.fingers === 3 ? 'Three fingers' : 'Two fingers'} · opening {Math.round(robot.sim_gripper.opening * 1000)} mm · fingers {Math.round(robot.sim_gripper.finger_length * 1000)} mm, on{' '}
             <span className="font-mono text-ink">{robot.sim_gripper.attach_link}</span>. Open and close it with the C key in Planning and Record; the
             opening is recorded as the <span className="font-mono text-ink">gripper</span> joint.
           </div>
@@ -470,6 +471,15 @@ function SimGripperCard({ robot, onChanged }) {
           <div className="mt-2 text-[12px] text-ink-3">
             This model has no gripper. Add one to the simulation so a cube can be picked up and placed. It is not part of the real robot.
           </div>
+          <div className="mt-2">
+            <Segmented
+              size="sm"
+              value={fingers}
+              onChange={setFingers}
+              options={[{ value: 2, label: 'Two-finger parallel' }, { value: 3, label: 'Three-finger (any shape)' }]}
+              data-field="gripper-fingers"
+            />
+          </div>
           <div className="mt-2 grid grid-cols-2 gap-2.5">
             <Field label="Opening (mm)">
               <NumberInput value={open} onChange={setOpen} min={20} max={250} data-field="gripper-opening" />
@@ -481,7 +491,7 @@ function SimGripperCard({ robot, onChanged }) {
           <button
             className="btn mt-2.5"
             disabled={busy}
-            onClick={() => run({ enabled: true, opening: open / 1000, finger_length: len / 1000 }, 'Gripper added')}
+            onClick={() => run({ enabled: true, fingers, opening: open / 1000, finger_length: len / 1000 }, 'Gripper added')}
             data-action="sim-gripper-add"
           >
             {busy && <Spinner />}

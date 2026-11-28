@@ -423,6 +423,10 @@ half the opening = closed) is added to the robot configuration; the second finge
 first (`<mimic>`, which needs no motor mapping). A model that already has a gripper joint is
 left alone.
 
+The gripper has two parallel fingers by default; choose **Three-finger** (option `fingers: 3`) for three
+fingers 120 degrees apart that centre the object on the axis. The joints are `sim_gripper` plus two
+mimics; the joint row and the recorded `gripper` channel are the same.
+
 The leader arm has no gripper, so the operator drives it: the **C** key (not while typing in a
 field) or the Open / Close button next to Engine in Planning and Record. The arm keeps following
 the leader. The opening is recorded as the follower's `gripper` state and as the `gripper`

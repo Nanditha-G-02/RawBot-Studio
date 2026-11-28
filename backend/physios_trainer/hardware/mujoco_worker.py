@@ -231,8 +231,13 @@ class World:
                 g.friction = [1.0, 0.005, 0.0001]
         else:
             g = b.add_geom()
-            g.type = mj.mjtGeom.mjGEOM_BOX
-            g.size = [s / 2] * 3
+            shape = it.get('shape')              # a cube unless the item says otherwise
+            if shape == 'cylinder':
+                g.type, g.size = mj.mjtGeom.mjGEOM_CYLINDER, [s / 2, s / 2, 0]
+            elif shape == 'sphere':
+                g.type, g.size = mj.mjtGeom.mjGEOM_SPHERE, [s / 2, 0, 0]
+            else:
+                g.type, g.size = mj.mjtGeom.mjGEOM_BOX, [s / 2] * 3
             g.pos = [0, 0, s / 2]
             g.mass = 0.05 * (s / 0.03) ** 3
             g.friction = [1.0, 0.01, 0.0002]

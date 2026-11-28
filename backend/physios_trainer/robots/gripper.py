@@ -19,10 +19,12 @@ import xml.etree.ElementTree as ET
 
 JOINT = 'sim_gripper'
 FOLLOWER_JOINT = 'sim_gripper_mimic'
+FOLLOWER_JOINT_3 = 'sim_gripper_mimic2'     # the third finger of the three-finger gripper
 ROS_NAME = 'gripper'
-GRIPPER_LINKS = ('sim_gripper_base', 'sim_finger_left', 'sim_finger_right', 'sim_tcp')
-DEFAULTS = {'opening': 0.08, 'finger_length': 0.06, 'finger_depth': 0.02, 'finger_thick': 0.008,
-            'body_length': 0.04, 'xyz': [0.0, 0.0, 0.0], 'rpy': [0.0, 0.0, 0.0]}
+GRIPPER_LINKS = ('sim_gripper_base', 'sim_finger_left', 'sim_finger_right', 'sim_finger_c',
+                 'sim_tcp')
+DEFAULTS = {'fingers': 2, 'opening': 0.08, 'finger_length': 0.06, 'finger_depth': 0.02,
+            'finger_thick': 0.008, 'body_length': 0.04, 'xyz': [0.0, 0.0, 0.0], 'rpy': [0.0, 0.0, 0.0]}
 _FINGER_MASS = 0.03
 _BASE_MASS = 0.15
 
@@ -44,7 +46,14 @@ def _f(v, lo, hi, what):
 def options(raw):
     """Clean gripper options (metres, radians); raises GripperError."""
     raw = raw or {}
+    try:
+        fingers = int(raw.get('fingers', DEFAULTS['fingers']))
+    except (TypeError, ValueError):
+        fingers = 0
+    if fingers not in (2, 3):
+        raise GripperError('Fingers must be 2 (parallel) or 3 (tripod).')
     o = {
+        'fingers': fingers,
         'opening': _f(raw.get('opening', DEFAULTS['opening']), 0.02, 0.25, 'Opening (m)'),
         'finger_length': _f(raw.get('finger_length', DEFAULTS['finger_length']), 0.02, 0.2,
                             'Finger length (m)'),
@@ -121,8 +130,57 @@ def _inertial(m, x, y, z):
                 m, m * (y * y + z * z) / 12, m * (x * x + z * z) / 12, m * (x * x + y * y) / 12))
 
 
+def _cyl(r, h):
+    return '<geometry><cylinder radius="%.5f" length="%.5f"/></geometry>' % (r, h)
+
+
+def _xml_three(o, attach_link):
+    """Three fingers 120 degrees apart around the gripper axis, each sliding radially. One
+    actuated joint and two mimics, so the three squeeze with the same stroke and centre an
+    object of any outline (cube, cylinder, ball) on the axis."""
+    t = travel(o)
+    fl, fd, ft, bl = o['finger_length'], o['finger_depth'], o['finger_thick'], o['body_length']
+    r0 = o['opening'] / 2 + ft / 2               # finger centre when open
+    br = o['opening'] / 2 + ft + 0.012           # body radius
+    names = [('a', JOINT, None), ('b', FOLLOWER_JOINT, JOINT), ('c', FOLLOWER_JOINT_3, JOINT)]
+    out = [
+        '<!-- simulated three-finger gripper (RawBot Studio): not part of the real robot -->',
+        '<link name="sim_gripper_base"><visual><origin xyz="0 0 %.5f"/>%s'
+        '<material name="sim_gripper_body"><color rgba="0.82 0.83 0.86 1"/></material></visual>'
+        '<collision><origin xyz="0 0 %.5f"/>%s</collision>%s</link>' % (
+            bl / 2, _cyl(br, bl), bl / 2, _cyl(br, bl), _inertial(_BASE_MASS, 2 * br, 2 * br, bl)),
+        '<joint name="sim_gripper_mount" type="fixed"><parent link="%s"/>'
+        '<child link="sim_gripper_base"/><origin xyz="%s" rpy="%s"/></joint>' % (
+            attach_link, ' '.join('%.5f' % v for v in o['xyz']),
+            ' '.join('%.5f' % v for v in o['rpy'])),
+    ]
+    for k, (tag, joint, leader) in enumerate(names):
+        yaw = k * 2 * math.pi / 3
+        out.append(
+            '<link name="sim_finger_%s"><visual><origin xyz="0 0 %.5f"/>%s'
+            '<material name="sim_gripper_finger"><color rgba="0.12 0.12 0.14 1"/></material>'
+            '</visual><collision><origin xyz="0 0 %.5f"/>%s</collision>%s</link>' % (
+                tag, fl / 2, _box(ft, fd, fl), fl / 2, _box(ft, fd, fl),
+                _inertial(_FINGER_MASS, ft, fd, fl)))
+        out.append(
+            '<joint name="%s" type="prismatic"><parent link="sim_gripper_base"/>'
+            '<child link="sim_finger_%s"/><origin xyz="%.5f %.5f %.5f" rpy="0 0 %.5f"/>'
+            '<axis xyz="-1 0 0"/><limit lower="0" upper="%.5f" effort="40" velocity="0.2"/>%s'
+            '</joint>' % (joint, tag, r0 * math.cos(yaw), r0 * math.sin(yaw), bl, yaw, t,
+                          '<mimic joint="%s" multiplier="1" offset="0"/>' % leader
+                          if leader else ''))
+    out += [
+        '<link name="sim_tcp"/>',
+        '<joint name="sim_tcp_joint" type="fixed"><parent link="sim_gripper_base"/>'
+        '<child link="sim_tcp"/><origin xyz="0 0 %.5f"/></joint>' % (bl + fl * 0.7),
+    ]
+    return '\n  '.join(out)
+
+
 def xml(o, attach_link):
     """The URDF elements of the gripper, to be placed before </robot>."""
+    if o.get('fingers') == 3:
+        return _xml_three(o, attach_link)
     t = travel(o)
     fl, fd, ft, bl = o['finger_length'], o['finger_depth'], o['finger_thick'], o['body_length']
     bw = o['opening'] + 2 * ft + 0.02          # body width across the fingers

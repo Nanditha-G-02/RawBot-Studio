@@ -126,12 +126,29 @@ LIFT_URDF = """<?xml version="1.0"?><robot name="lift">
 </robot>"""
 
 
+def test_the_three_finger_gripper_has_three_fingers_and_two_mimics():
+    text, o = gripper.attach(rf.arm_urdf(), {'fingers': 3, 'opening': 0.1})
+    assert o['fingers'] == 3
+    for n in ('sim_finger_a', 'sim_finger_b', 'sim_finger_c', 'sim_gripper_mimic',
+              'sim_gripper_mimic2'):
+        assert 'name="%s"' % n in text
+    assert text.count('<mimic joint="sim_gripper"') == 2
+    assert gripper.has_gripper(text) and gripper.travel(o) == 0.05
+    with pytest.raises(gripper.GripperError, match='Fingers'):
+        gripper.options({'fingers': 4})
+    # the two-finger default is unchanged
+    assert gripper.options({})['fingers'] == 2
+
+
 @pytest.mark.skipif(not sim_python(), reason='no Python with mujoco (install.sh --with-mujoco)')
-def test_mujoco_holds_a_cube_between_the_fingers_and_lifts_it(tmp_path):
+@pytest.mark.parametrize('fingers,shape', [(2, 'cube'), (3, 'cube'), (3, 'cylinder'),
+                                           (3, 'sphere')])
+def test_mujoco_holds_a_cube_between_the_fingers_and_lifts_it(tmp_path, fingers, shape):
     d = tmp_path / 'Lift'
     d.mkdir()
     # fingers point down (rotated half a turn about x); tips end 5 mm above the table
-    text, o = gripper.attach(LIFT_URDF, {'opening': 0.08, 'rpy': [3.14159265, 0, 0]})
+    text, o = gripper.attach(LIFT_URDF, {'opening': 0.08, 'fingers': fingers,
+                                          'rpy': [3.14159265, 0, 0]})
     (d / 'resolved.urdf').write_text(text)
     joints = [{'name': 'lift', 'type': 'prismatic', 'lower': 0.0, 'upper': 0.2},
               {'name': 'sim_gripper', 'type': 'prismatic', 'lower': 0.0, 'upper': 0.04}]
@@ -144,7 +161,8 @@ def test_mujoco_holds_a_cube_between_the_fingers_and_lifts_it(tmp_path):
     assert sim['joints'] == ['lift', 'sim_gripper']
     physics._probe.clear()
     b = physics.MujocoBackend(sim_python())
-    cube = {'id': 'cube', 'role': 'object', 'x': 0.2, 'y': 0.0, 'yaw': 0, 'size': 0.03}
+    cube = {'id': 'cube', 'role': 'object', 'x': 0.2, 'y': 0.0, 'yaw': 0, 'size': 0.03,
+            'shape': shape}
 
     def settle(q, s):
         b.set_targets(q)

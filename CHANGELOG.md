@@ -1,5 +1,14 @@
 # RawBot Studio changelog (formerly PHYSIOS)
 
+## Unreleased
+
+* **Three-finger simulated gripper.** The simulated gripper can have three fingers 120 degrees
+  apart (Robots -> Robot setup -> Model file -> Simulated gripper -> "Three-finger") instead of
+  two parallel ones. Each finger slides radially; one joint drives all three, so an object of any
+  outline is centred on the gripper axis. Tested in MuJoCo with a cube, a cylinder and a ball
+  (`shape` on a plan item, backend only for now). It is a simulation model: no matching
+  gripper exists for the Lite6 (payload 600 g). The recorded `gripper` channel is unchanged.
+
 ## 2.0.0, renamed (2026-11-13)
 
 * **Simulated follower in 3D, from the robot's URDF.** Planning → Robot & control and Record →
